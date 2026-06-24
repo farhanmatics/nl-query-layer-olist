@@ -61,7 +61,7 @@ Web Panel (React)  ←→  Backend (FastAPI)  ←→  Local Model (Ollama + gran
 |-------|------------|
 | **Backend** | Python 3.11+ · FastAPI · asyncpg (async Postgres) |
 | **Frontend** | React + TypeScript · Vite · TailwindCSS |
-| **LLM** | Ollama · granite4:3b (3B params, optimized for tool-calling) |
+| **LLM** | Ollama · qwen3.5:2b (2B params, excellent tool-calling, CPU-friendly) |
 | **Database** | PostgreSQL (read-only role) |
 | **Deployment** | Local dev (Mac/Linux) · VPS ready (Phase 3) |
 
@@ -162,7 +162,7 @@ This creates the `nlq_readonly` role with SELECT-only permissions.
 ```bash
 ollama serve
 # In another terminal:
-ollama pull granite4:3b
+ollama pull qwen3.5:2b
 ```
 
 ### 4. Start Backend

@@ -4,7 +4,7 @@
 
 Build a self-hosted, trustworthy NL→SQL query layer on top of the Olist PostgreSQL dataset. Non-technical staff ask plain-English questions; a local LLM translates intent into a typed function call; the backend executes a pre-written parameterized query and returns a verifiable, structured answer. The model never touches the DB and never authors SQL.
 
-Stack: Python + FastAPI · PostgreSQL (read-only role) · Ollama + granite4:3b · React chat panel · Local dev deployment · Dataset max-date anchor (2018-10-17) for relative date resolution.
+Stack: Python + FastAPI · PostgreSQL (read-only role) · Ollama + qwen3.5:2b · React chat panel · Local dev deployment · Dataset max-date anchor (2018-10-17) for relative date resolution.
 
 ---
 
@@ -81,7 +81,7 @@ The backend connects exclusively as `nlq_readonly`. No write path exists structu
 ```python
 DB_URL = "postgresql://nlq_readonly:changeme@localhost/olist"
 OLLAMA_BASE_URL = "http://localhost:11434"
-OLLAMA_MODEL = "granite4:3b"
+OLLAMA_MODEL = "qwen3.5:2b"
 REFERENCE_DATE = "2018-10-17"   # dataset max date — anchors "today" / "last month"
 ```
 
@@ -201,7 +201,7 @@ question (str)
 [1] Build system prompt: tool schemas + instruction to emit ONE tool call as JSON
     │
     ▼
-[2] POST to Ollama /api/chat (granite4:3b)
+[2] POST to Ollama /api/chat (qwen3.5:2b)
     │   model response = { "tool": "count_orders", "args": { "city": "São Paulo", "date_token": "last_month", "status": "delivered" } }
     ▼
 [3] Parse + validate args (validation layer)
@@ -293,6 +293,6 @@ After Phase 0 proves the vertical slice (functions 1+2), implement:
 | Reference date for relative terms | Anchor to `2018-10-17` (dataset max); `REFERENCE_DATE` env var switchable |
 | Frontend | React + Vite + TypeScript |
 | Backend | Python 3.11+ + FastAPI + asyncpg |
-| LLM | granite4:3b via Ollama (local) |
+| LLM | qwen3.5:2b via Ollama (local, 2B params, excellent tool-calling) |
 | Deployment | Local dev first |
 | JSON contract | Defined above under Phase 1 |
