@@ -123,12 +123,40 @@ Extract schema + functions + validation into per-customer **config** so new data
 
 ## Getting Started
 
+### TL;DR — Run the whole thing
+
+Assuming Postgres has the `olist` DB loaded, the `nlq_readonly` role exists (see step 2), `.env` is configured, deps are installed, and the model is pulled, you need **three things running**:
+
+```bash
+# 1. Ollama (if not already running as a service)
+ollama serve
+
+# 2. Backend (terminal 1) — from the repo root
+cd backend && ../venv/bin/uvicorn main:app --reload --port 8000
+#   (or: source venv/bin/activate, then `cd backend && uvicorn main:app --reload --port 8000`)
+
+# 3. Frontend (terminal 2)
+cd frontend && npm run dev
+```
+
+Then open **http://localhost:3000** and ask a question. The Vite dev server proxies `/api/*` to the backend on `:8000`, so no CORS or URL config is needed.
+
+Quick sanity checks:
+```bash
+curl http://localhost:8000/api/health          # {"db":"ok","llm":"ok",...}
+curl -X POST http://localhost:8000/api/query \
+  -H "Content-Type: application/json" \
+  -d '{"question":"How many delivered orders in São Paulo last month?"}'
+```
+
+First-time setup (DB role, venv, `.env`, model) is detailed in the numbered steps below.
+
 ### Prerequisites
 
 - **Python 3.9+** (3.9 verified working; 3.10+ also fine)
 - **Node.js 18+** (for frontend)
 - **PostgreSQL 12+** with the Olist dataset loaded
-- **Ollama** running locally with `granite4:3b` pulled
+- **Ollama** running locally with `qwen3.5:2b` pulled
 
 ### 1. Clone & Setup Backend
 
@@ -142,27 +170,59 @@ source venv/bin/activate  # macOS/Linux
 # or: venv\Scripts\activate  # Windows
 
 # Install dependencies
-pip install fastapi uvicorn asyncpg python-dotenv jsonschema requests pydantic
+pip install -r backend/requirements.txt
 
 # Copy .env.example and configure
 cp .env.example .env
 # Edit .env with your DB credentials, Ollama URL, etc.
 ```
 
-### 2. Set Up Database Role
+### 2. Set Up the Database (Migrations)
 
-First, create the readonly role:
+The backend ships a small, dependency-free migration runner (`backend/migrate.py`)
+that creates the Olist schema (tables, indexes, foreign keys) **and** the
+read-only `nlq_readonly` role. Migrations are idempotent and tracked in a
+`schema_migrations` table, so they run exactly once and are safe to re-run.
+
+> The running app connects with the read-only role and can never alter the
+> schema. Migrations use a separate admin/superuser connection, configured via
+> `MIGRATION_DB_URL` in `.env` (needs `CREATE` + `CREATEROLE`, e.g.
+> `postgresql://postgres:pass@localhost/olist`).
+
 ```bash
-psql -U postgres -d olist -f sql/readonly_role.sql
+cd backend
+
+# (optional) create the target database if it doesn't exist yet
+../venv/bin/python migrate.py create-db
+
+# see what will run
+../venv/bin/python migrate.py status
+
+# apply all pending migrations (schema + read-only role)
+../venv/bin/python migrate.py up
 ```
 
-Edit the password in `sql/readonly_role.sql` (line 4) from `'changeme'` to your preferred password, then update your `.env` file to match:
+After running, change the default role password and update `.env` to match:
+```sql
+ALTER ROLE nlq_readonly WITH PASSWORD 'your-strong-password';
+```
 ```bash
 # .env
-DB_URL=postgresql://nlq_readonly:your_password@localhost/olist
+DB_URL=postgresql://nlq_readonly:your-strong-password@localhost/olist
 ```
 
-This creates the `nlq_readonly` role with SELECT-only permissions.
+**Loading data:** migrations create the *structure* only. Load the Olist CSVs
+(from Kaggle) into the tables separately, e.g. with `\copy` in `psql`, or restore
+a full dump. The app needs data present to return non-empty answers.
+
+<details>
+<summary>Manual alternative (no migration runner)</summary>
+
+```bash
+psql -d olist -f olist_tables_structure.sql   # schema
+psql -d olist -f sql/readonly_role.sql        # read-only role
+```
+</details>
 
 ### 3. Start Ollama
 
@@ -267,8 +327,10 @@ Each function is a **pre-written parameterized query**. The LLM only fills typed
 
 - `CLAUDE.md` — Standing brief with architecture & principles
 - `project_plan.md` — Detailed implementation roadmap (Phase 0–2)
-- `olist_tables_structure.sql` — PostgreSQL schema dump
-- `sql/readonly_role.sql` — Read-only role definition
+- `olist_tables_structure.sql` — PostgreSQL schema dump (reference)
+- `sql/readonly_role.sql` — Read-only role definition (manual setup)
+- `backend/migrate.py` — Database migration runner (`status` / `up` / `create-db`)
+- `backend/migrations/` — Ordered, idempotent SQL migrations (schema + role)
 - `backend/` — Python FastAPI application
 - `frontend/` — React + TypeScript chat panel
 - `.env.example` — Environment variable template

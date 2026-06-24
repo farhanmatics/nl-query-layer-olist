@@ -22,12 +22,12 @@ export function ResultCard({ response }: ResultCardProps) {
       <div className="bg-white border border-gray-200 rounded-lg p-6 mb-4 shadow-sm">
         <h3 className="text-lg font-semibold text-gray-900 mb-4">Order Details</h3>
         <div className="space-y-3">
-          <Field label="Order ID" value={result.order_id} />
+          <Field label="Order ID" value={result.order_id as string} />
           <Field
             label="Status"
             value={
               <span className="inline-block px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-sm font-medium">
-                {result.order_status}
+                {result.order_status as string}
               </span>
             }
           />

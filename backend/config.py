@@ -4,6 +4,9 @@ from datetime import datetime
 
 class Settings(BaseSettings):
     db_url: str = "postgresql://nlq_readonly:changeme@localhost/olist"
+    # Admin/superuser connection used ONLY by migrate.py (needs CREATE + CREATEROLE).
+    # Never used by the running app, which connects read-only via db_url.
+    migration_db_url: str = "postgresql://localhost/olist"
     db_pool_min: int = 2
     db_pool_max: int = 10
     db_statement_timeout: int = 5000
