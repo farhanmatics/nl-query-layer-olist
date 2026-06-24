@@ -1,11 +1,12 @@
 import asyncpg
 from asyncpg.pool import Pool
+from typing import Optional
 from config import settings
 import logging
 
 logger = logging.getLogger(__name__)
 
-_pool: Pool | None = None
+_pool: Optional[Pool] = None
 
 
 async def get_pool() -> Pool:

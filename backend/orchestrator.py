@@ -77,29 +77,52 @@ async def process_question(question: str):
 
 
 def build_system_prompt(tool_schemas: list[dict]) -> str:
-    """Build the system prompt for the LLM with tool definitions"""
+    """Build the system prompt for the LLM with tool definitions and few-shot examples."""
     schema_json = json.dumps(tool_schemas, indent=2)
-    return f"""You are a helpful assistant that translates natural language questions into structured function calls.
+    return f"""You are a data query assistant. Your ONLY job is to convert a natural language question into a single JSON function call. You must extract ALL filters mentioned in the question — never drop any.
 
-You have access to the following tools:
-
+TOOLS:
 {schema_json}
 
-When given a question, respond with ONLY a valid JSON object in this format:
-{{
-  "tool": "<tool_name>",
-  "args": {{
-    "arg1": "value1",
-    "arg2": "value2"
-  }}
-}}
+OUTPUT RULES:
+- Respond with ONLY valid JSON, nothing else.
+- Always use the key "tool" for the function name and "args" for its arguments.
+- Only include args that are explicitly mentioned in the question.
+- If you cannot map to a tool, respond: {{"error": "Cannot map to available tools"}}
 
-Never respond with anything other than valid JSON. If you cannot determine the right tool, respond with:
-{{"error": "Unable to understand the question or map to available tools"}}
+DATE TOKENS (use exactly these strings when the question mentions time):
+- "today", "yesterday"
+- "this_week", "last_week"
+- "this_month", "last_month"
+- "this_year", "last_year"
+- OR an explicit range: {{"from": "YYYY-MM-DD", "to": "YYYY-MM-DD"}}
 
-For date ranges, use these tokens: 'today', 'yesterday', 'this_week', 'last_week', 'this_month', 'last_month', 'this_year', 'last_year'.
-For cities, normalize to Portuguese lowercase (e.g., 'sao paulo', 'rio de janeiro').
-For states, use Brazilian state codes (e.g., 'SP', 'RJ', 'MG').
+CITY RULES: normalize to lowercase without accents (e.g., "São Paulo" → "sao paulo", "Rio de Janeiro" → "rio de janeiro").
+STATE RULES: use 2-letter Brazilian UF codes (e.g., "SP", "RJ", "MG").
+
+--- FEW-SHOT EXAMPLES ---
+
+Q: "How many delivered orders did we have in São Paulo last month?"
+A: {{"tool": "count_orders", "args": {{"city": "sao paulo", "status": "delivered", "date_token": "last_month"}}}}
+
+Q: "How many canceled orders this year?"
+A: {{"tool": "count_orders", "args": {{"status": "canceled", "date_token": "this_year"}}}}
+
+Q: "How many orders in Rio de Janeiro last week?"
+A: {{"tool": "count_orders", "args": {{"city": "rio de janeiro", "date_token": "last_week"}}}}
+
+Q: "What is the status of order abc123?"
+A: {{"tool": "get_order_status", "args": {{"order_id": "abc123"}}}}
+
+Q: "How many shipped orders do we have?"
+A: {{"tool": "count_orders", "args": {{"status": "shipped"}}}}
+
+Q: "Total orders in SP this month?"
+A: {{"tool": "count_orders", "args": {{"state": "SP", "date_token": "this_month"}}}}
+
+--- END EXAMPLES ---
+
+Now convert the following question. Extract EVERY filter (city, state, status, date). Do not drop any.
 """
 
 

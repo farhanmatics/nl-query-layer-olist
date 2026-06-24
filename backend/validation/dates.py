@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-from typing import Tuple
+from typing import Optional, Tuple, Union
 import logging
 
 logger = logging.getLogger(__name__)
@@ -10,8 +10,8 @@ class ValidationError(Exception):
 
 
 def parse_date_range(
-    date_token: str | dict | None, reference_date: datetime
-) -> Tuple[datetime, datetime] | None:
+    date_token: Optional[Union[str, dict]], reference_date: datetime
+) -> Optional[Tuple[datetime, datetime]]:
     """
     Parse a date token into a concrete (start, end) tuple.
 

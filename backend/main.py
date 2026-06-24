@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import logging
+from typing import Optional
 from datetime import datetime
 from validation.cities import load_known_cities
 
@@ -27,12 +28,12 @@ class QueryRequest(BaseModel):
 
 
 class QueryResponse(BaseModel):
-    operation: str | None = None
-    filters: dict | None = None
-    result: dict | None = None
-    formatted_answer: str | None = None
-    source: str | None = None
-    error: str | None = None
+    operation: Optional[str] = None
+    filters: Optional[dict] = None
+    result: Optional[dict] = None
+    formatted_answer: Optional[str] = None
+    source: Optional[str] = None
+    error: Optional[str] = None
 
 
 class HealthResponse(BaseModel):

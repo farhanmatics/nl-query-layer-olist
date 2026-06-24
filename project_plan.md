@@ -292,7 +292,7 @@ After Phase 0 proves the vertical slice (functions 1+2), implement:
 |---|---|
 | Reference date for relative terms | Anchor to `2018-10-17` (dataset max); `REFERENCE_DATE` env var switchable |
 | Frontend | React + Vite + TypeScript |
-| Backend | Python 3.11+ + FastAPI + asyncpg |
+| Backend | Python 3.9+ + FastAPI + asyncpg |
 | LLM | qwen3.5:2b via Ollama (local, 2B params, excellent tool-calling) |
 | Deployment | Local dev first |
 | JSON contract | Defined above under Phase 1 |

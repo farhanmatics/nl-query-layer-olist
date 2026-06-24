@@ -1,6 +1,7 @@
 import logging
 import unicodedata
 import difflib
+from typing import Optional
 from db import execute_query
 
 logger = logging.getLogger(__name__)
@@ -41,7 +42,7 @@ async def load_known_cities() -> set[str]:
         return _known_cities
 
 
-async def resolve_city(city_input: str) -> str | None:
+async def resolve_city(city_input: str) -> Optional[str]:
     """
     Resolve a user-input city name to a canonical normalized city name.
 

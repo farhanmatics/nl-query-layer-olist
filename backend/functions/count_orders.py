@@ -1,4 +1,5 @@
 import logging
+from typing import Optional
 from datetime import datetime
 from db import execute_scalar
 from validation.cities import resolve_city
@@ -37,10 +38,10 @@ SCHEMA = {
 
 
 async def execute(
-    city: str | None = None,
-    state: str | None = None,
-    status: str | None = None,
-    date_token: str | None = None,
+    city: Optional[str] = None,
+    state: Optional[str] = None,
+    status: Optional[str] = None,
+    date_token: Optional[str] = None,
 ) -> dict:
     """
     Count orders with optional filters.

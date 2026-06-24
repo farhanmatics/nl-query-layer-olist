@@ -59,7 +59,7 @@ Web Panel (React)  ←→  Backend (FastAPI)  ←→  Local Model (Ollama + gran
 
 | Layer | Technology |
 |-------|------------|
-| **Backend** | Python 3.11+ · FastAPI · asyncpg (async Postgres) |
+| **Backend** | Python 3.9+ · FastAPI · asyncpg (async Postgres) |
 | **Frontend** | React + TypeScript · Vite · TailwindCSS |
 | **LLM** | Ollama · qwen3.5:2b (2B params, excellent tool-calling, CPU-friendly) |
 | **Database** | PostgreSQL (read-only role) |
@@ -125,7 +125,7 @@ Extract schema + functions + validation into per-customer **config** so new data
 
 ### Prerequisites
 
-- **Python 3.11+**
+- **Python 3.9+** (3.9 verified working; 3.10+ also fine)
 - **Node.js 18+** (for frontend)
 - **PostgreSQL 12+** with the Olist dataset loaded
 - **Ollama** running locally with `granite4:3b` pulled
