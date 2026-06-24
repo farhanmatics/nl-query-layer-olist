@@ -116,7 +116,7 @@ async def execute(
 
     if date_range:
         query += " AND o.order_purchase_timestamp >= $" + str(len(params) + 1)
-        query += " AND o.order_purchase_timestamp < $" + str(len(params) + 2)
+        query += " AND o.order_purchase_timestamp <= $" + str(len(params) + 2)
         params.extend([date_range[0], date_range[1]])
 
     try:

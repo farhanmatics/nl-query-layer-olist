@@ -84,11 +84,11 @@ async def query(request: QueryRequest):
 
 async def check_llm_health() -> bool:
     try:
-        import requests
-        from config import settings
+        import httpx
 
-        response = requests.get(f"{settings.ollama_base_url}/api/tags", timeout=2)
-        return response.status_code == 200
+        async with httpx.AsyncClient() as client:
+            response = await client.get(f"{settings.ollama_base_url}/api/tags", timeout=2)
+            return response.status_code == 200
     except Exception as e:
         logger.error(f"LLM health check failed: {e}")
         return False

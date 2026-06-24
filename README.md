@@ -151,8 +151,15 @@ cp .env.example .env
 
 ### 2. Set Up Database Role
 
+First, create the readonly role:
 ```bash
 psql -U postgres -d olist -f sql/readonly_role.sql
+```
+
+Edit the password in `sql/readonly_role.sql` (line 4) from `'changeme'` to your preferred password, then update your `.env` file to match:
+```bash
+# .env
+DB_URL=postgresql://nlq_readonly:your_password@localhost/olist
 ```
 
 This creates the `nlq_readonly` role with SELECT-only permissions.
@@ -186,9 +193,14 @@ Visit `http://localhost:3000` to open the chat panel.
 
 ### 6. Test
 
-Ask a question:
-> "What is the status of order [order_id]?"
-> "How many delivered orders did we have last month?"
+First, get a real order ID from the database:
+```bash
+psql -U nlq_readonly -d olist -c "SELECT order_id FROM olist_orders_dataset LIMIT 1;"
+```
+
+Then ask questions:
+> "What is the status of order abc123xyz?" (replace with real order_id)
+> "How many delivered orders did we have in São Paulo last month?"
 
 ---
 

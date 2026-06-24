@@ -1,6 +1,6 @@
 import json
 import logging
-import requests
+import httpx
 from datetime import datetime
 from config import settings
 
@@ -116,23 +116,24 @@ async def call_llm_for_tool(question: str, system_prompt: str) -> dict:
             "format": "json",
         }
 
-        response = requests.post(
-            f"{settings.ollama_base_url}/api/chat",
-            json=payload,
-            timeout=30,
-        )
-        response.raise_for_status()
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{settings.ollama_base_url}/api/chat",
+                json=payload,
+                timeout=30,
+            )
+            response.raise_for_status()
 
-        result = response.json()
-        content = result.get("message", {}).get("content", "")
+            result = response.json()
+            content = result.get("message", {}).get("content", "")
 
-        tool_call = json.loads(content)
-        return tool_call
+            tool_call = json.loads(content)
+            return tool_call
 
     except json.JSONDecodeError as e:
         logger.error(f"Failed to parse LLM JSON response: {e}")
         return {"error": "LLM returned invalid JSON"}
-    except requests.RequestException as e:
+    except httpx.RequestError as e:
         logger.error(f"LLM request failed: {e}")
         return {"error": f"LLM service error: {str(e)}"}
     except Exception as e:
