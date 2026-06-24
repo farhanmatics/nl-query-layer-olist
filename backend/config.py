@@ -10,8 +10,10 @@ class Settings(BaseSettings):
 
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "qwen3.5:2b"
+    llm_timeout_seconds: int = 90
+    llm_max_attempts: int = 2
 
-    reference_date: str = "2018-10-17"
+    reference_date: str = "2018-08-20"
     api_host: str = "0.0.0.0"
     api_port: int = 8000
 

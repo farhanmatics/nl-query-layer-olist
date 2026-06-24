@@ -127,41 +127,57 @@ Now convert the following question. Extract EVERY filter (city, state, status, d
 
 
 async def call_llm_for_tool(question: str, system_prompt: str) -> dict:
-    """Call Ollama to translate question into a tool call"""
-    try:
-        payload = {
-            "model": settings.ollama_model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": question},
-            ],
-            "stream": False,
-            "format": "json",
-        }
+    """Call Ollama to translate question into a tool call.
 
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{settings.ollama_base_url}/api/chat",
-                json=payload,
-                timeout=30,
+    Hardened against the realities of small models on CPU:
+    - temperature=0 for deterministic, faster tool selection
+    - a generous timeout (inference latency swings widely on CPU)
+    - one retry on a timeout or unparseable response before giving up
+    """
+    payload = {
+        "model": settings.ollama_model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": question},
+        ],
+        "stream": False,
+        "format": "json",
+        "options": {"temperature": 0},
+    }
+
+    last_error = "LLM call failed"
+
+    for attempt in range(1, settings.llm_max_attempts + 1):
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{settings.ollama_base_url}/api/chat",
+                    json=payload,
+                    timeout=settings.llm_timeout_seconds,
+                )
+                response.raise_for_status()
+
+            content = response.json().get("message", {}).get("content", "")
+            return json.loads(content)
+
+        except json.JSONDecodeError as e:
+            last_error = "LLM returned invalid JSON"
+            logger.warning(f"Attempt {attempt}: failed to parse LLM JSON: {e}")
+        except httpx.TimeoutException:
+            last_error = (
+                f"Model timed out after {settings.llm_timeout_seconds}s "
+                "(slow inference on CPU) — please try again"
             )
-            response.raise_for_status()
+            logger.warning(f"Attempt {attempt}: LLM request timed out")
+        except httpx.RequestError as e:
+            last_error = f"LLM service unreachable: {e!r}"
+            logger.warning(f"Attempt {attempt}: LLM request failed: {e!r}")
+        except Exception as e:
+            last_error = str(e) or "Unexpected LLM error"
+            logger.error(f"Attempt {attempt}: unexpected error calling LLM: {e!r}")
 
-            result = response.json()
-            content = result.get("message", {}).get("content", "")
-
-            tool_call = json.loads(content)
-            return tool_call
-
-    except json.JSONDecodeError as e:
-        logger.error(f"Failed to parse LLM JSON response: {e}")
-        return {"error": "LLM returned invalid JSON"}
-    except httpx.RequestError as e:
-        logger.error(f"LLM request failed: {e}")
-        return {"error": f"LLM service error: {str(e)}"}
-    except Exception as e:
-        logger.error(f"Unexpected error calling LLM: {e}")
-        return {"error": str(e)}
+    logger.error(f"LLM failed after {settings.llm_max_attempts} attempts: {last_error}")
+    return {"error": last_error}
 
 
 async def dispatch_function(tool_name: str, args: dict) -> dict:
