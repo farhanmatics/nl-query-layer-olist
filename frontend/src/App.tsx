@@ -2,77 +2,75 @@ import { useState, useEffect } from 'react'
 import { ChatPanel } from './components/ChatPanel'
 import { query, checkHealth, QueryResponse } from './api'
 
-interface Message {
+export interface Message {
   id: string
   role: 'user' | 'assistant'
   content: string
   response?: QueryResponse
+  at: number
 }
+
+type Health = 'checking' | 'online' | 'offline'
 
 function App() {
   const [messages, setMessages] = useState<Message[]>([])
   const [isLoading, setIsLoading] = useState(false)
-  const [isHealthy, setIsHealthy] = useState(false)
+  const [health, setHealth] = useState<Health>('checking')
 
-  // Check health on mount
+  // Poll backend health on mount and periodically so the status pill stays live.
   useEffect(() => {
-    const checkBackend = async () => {
+    let active = true
+    const ping = async () => {
       try {
-        await checkHealth()
-        setIsHealthy(true)
-      } catch (error) {
-        console.error('Backend health check failed:', error)
-        setIsHealthy(false)
+        const h = await checkHealth()
+        if (active) setHealth(h?.db === 'ok' && h?.llm === 'ok' ? 'online' : 'offline')
+      } catch {
+        if (active) setHealth('offline')
       }
     }
-
-    checkBackend()
+    ping()
+    const id = setInterval(ping, 15000)
+    return () => {
+      active = false
+      clearInterval(id)
+    }
   }, [])
 
   const handleSendMessage = async (text: string) => {
-    if (!isHealthy) {
-      setMessages(prev => [
-        ...prev,
-        {
-          id: Date.now().toString(),
-          role: 'assistant',
-          content: 'Backend is not available. Please check that the server is running.',
-        },
-      ])
-      return
-    }
-
-    // Add user message
     const userMsg: Message = {
-      id: Date.now().toString(),
+      id: crypto.randomUUID(),
       role: 'user',
       content: text,
+      at: Date.now(),
     }
     setMessages(prev => [...prev, userMsg])
-
     setIsLoading(true)
+
     try {
       const response = await query(text)
-
-      // Add assistant response
-      const assistantMsg: Message = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content:
-          response.formatted_answer ||
-          response.error ||
-          `Query executed: ${response.operation}`,
-        response,
-      }
-      setMessages(prev => [...prev, assistantMsg])
-    } catch (error) {
-      console.error('Query failed:', error)
       setMessages(prev => [
         ...prev,
         {
-          id: (Date.now() + 1).toString(),
+          id: crypto.randomUUID(),
           role: 'assistant',
-          content: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          content:
+            response.formatted_answer ||
+            response.error ||
+            `Query executed: ${response.operation}`,
+          response,
+          at: Date.now(),
+        },
+      ])
+    } catch (error) {
+      setMessages(prev => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          role: 'assistant',
+          content: `Couldn't reach the backend: ${
+            error instanceof Error ? error.message : 'unknown error'
+          }`,
+          at: Date.now(),
         },
       ])
     } finally {
@@ -81,19 +79,12 @@ function App() {
   }
 
   return (
-    <div className="w-full h-screen flex items-center justify-center bg-gray-50 p-4">
-      {!isHealthy && (
-        <div className="fixed top-4 right-4 bg-red-50 border border-red-200 rounded-lg p-4 max-w-sm">
-          <p className="text-red-700 font-semibold text-sm">⚠️ Backend Unavailable</p>
-          <p className="text-red-600 text-xs mt-1">
-            Please ensure the backend server is running on http://localhost:8000
-          </p>
-        </div>
-      )}
-      <div className="w-full max-w-2xl h-full">
+    <div className="h-full w-full bg-gradient-to-b from-slate-100 to-slate-200/60 text-slate-900">
+      <div className="mx-auto flex h-full max-w-3xl flex-col px-4">
         <ChatPanel
           messages={messages}
           isLoading={isLoading}
+          health={health}
           onSendMessage={handleSendMessage}
         />
       </div>
