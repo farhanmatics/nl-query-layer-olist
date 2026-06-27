@@ -99,6 +99,8 @@ DATE TOKENS (use exactly these strings when the question mentions time):
 
 CITY RULES: normalize to lowercase without accents (e.g., "São Paulo" → "sao paulo", "Rio de Janeiro" → "rio de janeiro").
 STATE RULES: use 2-letter Brazilian UF codes (e.g., "SP", "RJ", "MG").
+STATUS RULES: valid order statuses are delivered, shipped, canceled, processing, invoiced, unavailable, approved, created. Pass the status verbatim from this list.
+GROUP_BY RULES: when a question says "by X" / "broken down by X" / "grouped by X" / "per X" (X = state, category, or month), set group_by to that dimension.
 
 --- FEW-SHOT EXAMPLES ---
 
@@ -120,21 +122,85 @@ A: {{"tool": "count_orders", "args": {{"status": "shipped"}}}}
 Q: "Total orders in SP this month?"
 A: {{"tool": "count_orders", "args": {{"state": "SP", "date_token": "this_month"}}}}
 
+Q: "What was our total revenue last month?"
+A: {{"tool": "get_revenue", "args": {{"date_token": "last_month"}}}}
+
+Q: "Revenue by state this year"
+A: {{"tool": "get_revenue", "args": {{"date_token": "this_year", "group_by": "state"}}}}
+
+Q: "Show revenue broken down by category"
+A: {{"tool": "get_revenue", "args": {{"group_by": "category"}}}}
+
+Q: "Total revenue in MG last year"
+A: {{"tool": "get_revenue", "args": {{"state": "MG", "date_token": "last_year"}}}}
+
+Q: "How much revenue did the health_beauty category make?"
+A: {{"tool": "get_revenue", "args": {{"category": "health_beauty"}}}}
+
+Q: "How many approved orders last year?"
+A: {{"tool": "count_orders", "args": {{"status": "approved", "date_token": "last_year"}}}}
+
+Q: "How many low reviews did we get last month?"
+A: {{"tool": "count_low_reviews", "args": {{"date_token": "last_month"}}}}
+
+Q: "How many 1-star or 2-star reviews in Sao Paulo?"
+A: {{"tool": "count_low_reviews", "args": {{"score_max": 2, "city": "sao paulo"}}}}
+
+Q: "What are our best-selling products?"
+A: {{"tool": "top_products", "args": {{"by": "count", "limit": 10}}}}
+
+Q: "Top 5 products by revenue this year"
+A: {{"tool": "top_products", "args": {{"by": "revenue", "limit": 5, "date_token": "this_year"}}}}
+
+Q: "Show me delivered orders in Sao Paulo"
+A: {{"tool": "list_orders", "args": {{"city": "sao paulo", "status": "delivered"}}}}
+
+Q: "List the next 20 canceled orders"
+A: {{"tool": "list_orders", "args": {{"status": "canceled", "limit": 20}}}}
+
+Q: "List 30 shipped orders in MG"
+A: {{"tool": "list_orders", "args": {{"state": "MG", "status": "shipped", "limit": 30}}}}
+
 --- END EXAMPLES ---
 
 Now convert the following question. Extract EVERY filter (city, state, status, date). Do not drop any.
 """
 
 
+def _extract_json(content: str) -> dict:
+    """Best-effort parse of an LLM tool call.
+
+    Ollama's format=json usually returns a clean object, but small models
+    occasionally wrap it in prose or ```json fences. Try a strict parse first,
+    then fall back to the outermost {...} span. Raises json.JSONDecodeError if
+    nothing parseable is found.
+    """
+    text = (content or "").strip()
+    if text.startswith("```"):
+        # strip a leading ```json / ``` fence and any trailing fence
+        text = text.split("```", 2)[1] if text.count("```") >= 2 else text.strip("`")
+        if text.lstrip().lower().startswith("json"):
+            text = text.lstrip()[4:]
+        text = text.strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        start, end = text.find("{"), text.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            return json.loads(text[start : end + 1])
+        raise
+
+
 async def call_llm_for_tool(question: str, system_prompt: str) -> dict:
     """Call Ollama to translate question into a tool call.
 
     Hardened against the realities of small models on CPU:
-    - temperature=0 for deterministic, faster tool selection
+    - temperature=0 on the first pass for deterministic, fast tool selection
     - a generous timeout (inference latency swings widely on CPU)
-    - one retry on a timeout or unparseable response before giving up
+    - retry on timeout or unparseable output; because temp=0 is deterministic,
+      a parse-failure retry raises the temperature so the resample differs
     """
-    payload = {
+    base_payload = {
         "model": settings.ollama_model,
         "messages": [
             {"role": "system", "content": system_prompt},
@@ -142,12 +208,15 @@ async def call_llm_for_tool(question: str, system_prompt: str) -> dict:
         ],
         "stream": False,
         "format": "json",
-        "options": {"temperature": 0},
     }
 
     last_error = "LLM call failed"
 
     for attempt in range(1, settings.llm_max_attempts + 1):
+        # First attempt greedy (temp=0); later attempts sample so a deterministic
+        # bad output doesn't simply repeat.
+        temperature = 0 if attempt == 1 else 0.4
+        payload = {**base_payload, "options": {"temperature": temperature}}
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
@@ -158,7 +227,7 @@ async def call_llm_for_tool(question: str, system_prompt: str) -> dict:
                 response.raise_for_status()
 
             content = response.json().get("message", {}).get("content", "")
-            return json.loads(content)
+            return _extract_json(content)
 
         except json.JSONDecodeError as e:
             last_error = "LLM returned invalid JSON"
@@ -214,13 +283,61 @@ async def format_answer(tool_name: str, result: dict) -> str:
 
     elif tool_name == "count_orders":
         count = result.get("count", 0)
-        filters = result.get("filters", {})
-        filter_str = " ".join(f"{k}: {v}" for k, v in filters.items() if v)
+        filter_str = _filter_str(result.get("filters", {}))
         if filter_str:
             return f"There were {count:,} orders ({filter_str})."
         return f"There were {count:,} orders."
 
+    elif tool_name == "get_revenue":
+        if "breakdown" in result:
+            group_by = result.get("group_by", "group")
+            rows = result.get("breakdown", [])
+            top = ", ".join(
+                f"{r.get(group_by, '?')}: {r.get('revenue', 0):,.2f}" for r in rows[:5]
+            )
+            return f"Revenue by {group_by} — {top}" if top else "No revenue found."
+        revenue = result.get("revenue", 0) or 0
+        filter_str = _filter_str(result.get("filters", {}))
+        if filter_str:
+            return f"Total revenue was R$ {revenue:,.2f} ({filter_str})."
+        return f"Total revenue was R$ {revenue:,.2f}."
+
+    elif tool_name == "count_low_reviews":
+        count = result.get("count", 0)
+        filter_str = _filter_str(result.get("filters", {}))
+        if filter_str:
+            return f"There were {count:,} low reviews ({filter_str})."
+        return f"There were {count:,} low reviews."
+
+    elif tool_name == "top_products":
+        products = result.get("products", [])
+        by = result.get("by", "count")
+        if not products:
+            return "No products found for those filters."
+        lines = []
+        for i, p in enumerate(products, 1):
+            val = p.get("value", 0)
+            val_str = f"R$ {val:,.2f}" if by == "revenue" else f"{val:,} sold"
+            lines.append(f"{i}. {p.get('category') or p.get('product_id')} ({val_str})")
+        return f"Top {len(products)} products by {by}: " + "; ".join(lines)
+
+    elif tool_name == "list_orders":
+        total = result.get("total_count", 0)
+        orders = result.get("orders", [])
+        offset = result.get("offset", 0)
+        filter_str = _filter_str(result.get("filters", {}))
+        suffix = f" ({filter_str})" if filter_str else ""
+        return (
+            f"Showing {len(orders)} of {total:,} matching orders "
+            f"(from #{offset + 1}){suffix}."
+        )
+
     return "Query executed successfully."
+
+
+def _filter_str(filters: dict) -> str:
+    """Render a compact 'k: v' summary of non-empty filters."""
+    return " ".join(f"{k}: {v}" for k, v in (filters or {}).items() if v)
 
 
 def get_source_citation(tool_name: str) -> str:
@@ -228,5 +345,9 @@ def get_source_citation(tool_name: str) -> str:
     citations = {
         "get_order_status": "olist_orders_dataset JOIN olist_customers_dataset",
         "count_orders": "olist_orders_dataset JOIN olist_customers_dataset",
+        "get_revenue": "olist_order_payments_dataset / olist_order_items_dataset JOIN olist_orders_dataset",
+        "count_low_reviews": "olist_order_reviews_dataset JOIN olist_orders_dataset",
+        "top_products": "olist_order_items_dataset JOIN olist_products_dataset, product_category_name_translation",
+        "list_orders": "olist_orders_dataset JOIN olist_customers_dataset",
     }
     return citations.get(tool_name, "olist_orders_dataset")

@@ -2,7 +2,14 @@
 Function registry: maps tool names to executable handlers and JSON schemas.
 """
 
-from functions import get_order_status, count_orders
+from functions import (
+    get_order_status,
+    count_orders,
+    get_revenue,
+    count_low_reviews,
+    top_products,
+    list_orders,
+)
 
 FUNCTIONS = {
     "get_order_status": {
@@ -12,6 +19,22 @@ FUNCTIONS = {
     "count_orders": {
         "schema": count_orders.SCHEMA,
         "execute": count_orders.execute,
+    },
+    "get_revenue": {
+        "schema": get_revenue.SCHEMA,
+        "execute": get_revenue.execute,
+    },
+    "count_low_reviews": {
+        "schema": count_low_reviews.SCHEMA,
+        "execute": count_low_reviews.execute,
+    },
+    "top_products": {
+        "schema": top_products.SCHEMA,
+        "execute": top_products.execute,
+    },
+    "list_orders": {
+        "schema": list_orders.SCHEMA,
+        "execute": list_orders.execute,
     },
 }
 
