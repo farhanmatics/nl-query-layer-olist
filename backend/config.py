@@ -16,6 +16,13 @@ class Settings(BaseSettings):
     llm_timeout_seconds: int = 90
     llm_max_attempts: int = 2
 
+    # Layer 1 cache: question -> tool call (the LLM translation step only).
+    # Safe to cache aggressively; it stores no data and is auto-invalidated when
+    # the system prompt changes (the key hashes the prompt).
+    llm_cache_enabled: bool = True
+    llm_cache_ttl_seconds: int = 86400
+    llm_cache_max_entries: int = 1024
+
     reference_date: str = "2018-08-20"
     api_host: str = "0.0.0.0"
     api_port: int = 8000

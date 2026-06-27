@@ -1,8 +1,10 @@
+import copy
 import json
 import logging
 import httpx
 from datetime import datetime
 from config import settings
+from cache import translation_cache, translation_key
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +27,28 @@ async def process_question(question: str):
         tool_schemas = get_all_schemas()
         system_prompt = build_system_prompt(tool_schemas)
 
-        tool_call = await call_llm_for_tool(question, system_prompt)
+        # Layer 1 cache: reuse a prior translation of this question (no data is
+        # cached — the query below still runs against the live DB).
+        cache_key = translation_key(question, system_prompt)
+        cached_call = (
+            translation_cache.get(cache_key) if settings.llm_cache_enabled else None
+        )
+        if cached_call is not None:
+            from_cache = True
+            tool_call = copy.deepcopy(cached_call)
+            logger.info(f"Translation cache HIT: {question}")
+        else:
+            from_cache = False
+            tool_call = await call_llm_for_tool(question, system_prompt)
+            # Only cache a clean, usable tool call — never a transient error.
+            if (
+                settings.llm_cache_enabled
+                and isinstance(tool_call, dict)
+                and "error" not in tool_call
+                and tool_call.get("tool")
+            ):
+                translation_cache.set(cache_key, copy.deepcopy(tool_call))
+
         logger.info(f"LLM selected tool: {tool_call.get('tool')}")
 
         if not tool_call or "error" in tool_call:
@@ -36,6 +59,7 @@ async def process_question(question: str):
                 "result": None,
                 "formatted_answer": None,
                 "source": None,
+                "cached": from_cache,
             }
 
         tool_name = tool_call.get("tool")
@@ -51,6 +75,7 @@ async def process_question(question: str):
                 "result": None,
                 "formatted_answer": None,
                 "source": None,
+                "cached": from_cache,
             }
 
         formatted_answer = await format_answer(tool_name, result)
@@ -62,6 +87,7 @@ async def process_question(question: str):
             "formatted_answer": formatted_answer,
             "source": get_source_citation(tool_name),
             "error": None,
+            "cached": from_cache,
         }
 
     except Exception as e:

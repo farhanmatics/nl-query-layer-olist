@@ -34,6 +34,7 @@ class QueryResponse(BaseModel):
     formatted_answer: Optional[str] = None
     source: Optional[str] = None
     error: Optional[str] = None
+    cached: bool = False
 
 
 class HealthResponse(BaseModel):
@@ -81,6 +82,23 @@ async def query(request: QueryRequest):
     except Exception as e:
         logger.error(f"Query failed: {e}", exc_info=True)
         return QueryResponse(error=f"Query processing failed: {str(e)}")
+
+
+@app.get("/api/cache/stats")
+async def cache_stats():
+    """Layer 1 (LLM translation) cache stats: hits, misses, hit rate, size."""
+    from cache import translation_cache
+
+    return translation_cache.stats()
+
+
+@app.post("/api/cache/clear")
+async def cache_clear():
+    """Flush the translation cache (e.g. after changing the prompt manually)."""
+    from cache import translation_cache
+
+    translation_cache.clear()
+    return {"cleared": True}
 
 
 async def check_llm_health() -> bool:
