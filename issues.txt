@@ -1,0 +1,10 @@
+Two things, both small and in the same fail-closed spirit:
+
+1. Close the invalid-value gap — add a high-precision lexicon of status-like qualifiers that aren't valid enums (returned, refunded, completed, pending, dispatched…). If one modifies the entity but no status arg results → fail closed: "We don't track a 'returned' status; valid statuses are delivered, shipped, canceled…" Deterministic, same philosophy as the existing guard. This is model-independent and arguably the most important faithfulness fix left, since it can return the whole-dataset total as a narrow answer.
+2. Latent bug I spotted: the translation cache key hashes the prompt but not the model name (cache.py). Harmless today because the cache is in-memory per process (a restart clears it), but if it's ever persisted or the model is swapped without a restart, you'd serve one model's translations to another. One-line fix: add settings.ollama_model to the key.
+
+Want me to implement #1 (the invalid-value guard) and #2 (cache key), then re-run both the 2B and 9B evals to confirm e47 closes? And which model are you planning to ship — that decides whether the guard + few-shots stay in or the guard becomes pure backstop?
+
+
+
+-------------

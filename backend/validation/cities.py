@@ -42,6 +42,16 @@ async def load_known_cities() -> set[str]:
         return _known_cities
 
 
+def get_known_cities() -> set[str]:
+    """Synchronous accessor for the already-loaded known-city set.
+
+    Returns the set loaded at startup by load_known_cities(), or an empty set if
+    it hasn't been loaded yet. Used by the faithfulness guard, which must run
+    synchronously inside the orchestration path without touching the DB.
+    """
+    return _known_cities or set()
+
+
 async def resolve_city(city_input: str) -> Optional[str]:
     """
     Resolve a user-input city name to a canonical normalized city name.

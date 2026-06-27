@@ -1,3 +1,8 @@
+export interface GuardReport {
+  applied: string[]
+  unresolved: string[]
+}
+
 export interface QueryResponse {
   operation: string | null
   filters: Record<string, unknown> | null
@@ -5,6 +10,8 @@ export interface QueryResponse {
   formatted_answer: string | null
   source: string | null
   error: string | null
+  cached?: boolean
+  guard?: GuardReport | null
 }
 
 export async function query(question: string): Promise<QueryResponse> {

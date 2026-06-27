@@ -35,6 +35,7 @@ class QueryResponse(BaseModel):
     source: Optional[str] = None
     error: Optional[str] = None
     cached: bool = False
+    guard: Optional[dict] = None
 
 
 class HealthResponse(BaseModel):

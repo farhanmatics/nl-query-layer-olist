@@ -1,4 +1,4 @@
-import { QueryResponse } from '../api'
+import { QueryResponse, GuardReport } from '../api'
 
 interface ResultCardProps {
   response: QueryResponse
@@ -14,7 +14,7 @@ export function ResultCard({ response }: ResultCardProps) {
     )
   }
 
-  const { operation, result, formatted_answer, source, filters } = response
+  const { operation, result, formatted_answer, source, filters, guard } = response
 
   // Render based on operation type
   if (operation === 'get_order_status' && result) {
@@ -61,6 +61,7 @@ export function ResultCard({ response }: ResultCardProps) {
             <div className="text-gray-700 italic mb-4">{formatted_answer}</div>
           )}
         </div>
+        <GuardNote guard={guard} />
         {filters && <FiltersSummary filters={filters} />}
         {source && <Citation source={source} />}
       </div>
@@ -80,8 +81,23 @@ export function ResultCard({ response }: ResultCardProps) {
           </pre>
         </div>
       )}
+      <GuardNote guard={guard} />
       {filters && <FiltersSummary filters={filters} />}
       {source && <Citation source={source} />}
+    </div>
+  )
+}
+
+function GuardNote({ guard }: { guard?: GuardReport | null }) {
+  if (!guard || !guard.applied || guard.applied.length === 0) return null
+
+  return (
+    <div className="mt-4 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
+      <span aria-hidden className="text-amber-600">🛡️</span>
+      <div className="text-sm text-amber-800">
+        <span className="font-medium">Filters auto-applied</span> from your wording:{' '}
+        <span className="font-mono">{guard.applied.join(', ')}</span>
+      </div>
     </div>
   )
 }

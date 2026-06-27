@@ -63,7 +63,26 @@ async def process_question(question: str):
             }
 
         tool_name = tool_call.get("tool")
-        args = tool_call.get("args", {})
+        args = dict(tool_call.get("args", {}) or {})
+
+        # Filter-faithfulness guard: catch filters the model dropped before they
+        # turn into a confidently wrong answer (see validation/faithfulness.py).
+        guard = apply_filter_guard(question, tool_name, args)
+        if guard.get("unresolved"):
+            missing = ", ".join(guard["unresolved"])
+            return {
+                "error": (
+                    f"Your question seems to reference {missing}, but I couldn't "
+                    "apply it reliably. Please rephrase so the filter is explicit."
+                ),
+                "operation": tool_name,
+                "filters": args,
+                "result": None,
+                "formatted_answer": None,
+                "source": None,
+                "cached": from_cache,
+                "guard": guard,
+            }
 
         result = await dispatch_function(tool_name, args)
 
@@ -76,6 +95,7 @@ async def process_question(question: str):
                 "formatted_answer": None,
                 "source": None,
                 "cached": from_cache,
+                "guard": guard,
             }
 
         formatted_answer = await format_answer(tool_name, result)
@@ -88,6 +108,7 @@ async def process_question(question: str):
             "source": get_source_citation(tool_name),
             "error": None,
             "cached": from_cache,
+            "guard": guard,
         }
 
     except Exception as e:
@@ -273,6 +294,36 @@ async def call_llm_for_tool(question: str, system_prompt: str) -> dict:
 
     logger.error(f"LLM failed after {settings.llm_max_attempts} attempts: {last_error}")
     return {"error": last_error}
+
+
+def apply_filter_guard(question: str, tool_name: str, args: dict) -> dict:
+    """Run the faithfulness guard for a tool call and repair the args in place.
+
+    Looks up which parameters the chosen tool accepts, detects filters that are
+    present in the question but missing from the model's args, and merges any
+    safe repairs into `args`. Returns the guard report ({applied, unresolved})
+    for auditability; on any internal error it degrades to a no-op so a guard
+    bug can never block an otherwise-valid query.
+    """
+    try:
+        from functions.registry import get_function
+        from validation.cities import get_known_cities
+        from validation.faithfulness import check_filter_faithfulness
+
+        schema = get_function(tool_name)["schema"]
+        supported = set(schema.get("parameters", {}).get("properties", {}).keys())
+    except Exception:
+        return {"applied": [], "unresolved": []}
+
+    report = check_filter_faithfulness(
+        question, supported, args, get_known_cities()
+    )
+    if report["repairs"]:
+        args.update(report["repairs"])
+        logger.info(
+            f"Faithfulness guard repaired dropped filters: {report['applied']}"
+        )
+    return {"applied": report["applied"], "unresolved": report["unresolved"]}
 
 
 async def dispatch_function(tool_name: str, args: dict) -> dict:
