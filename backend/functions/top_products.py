@@ -3,6 +3,7 @@ from typing import Optional
 from db import execute_query
 from validation.dates import parse_date_range
 from config import settings
+from errors import client_error
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +120,6 @@ async def execute(
     except Exception as e:
         logger.error(f"Query failed: {e}")
         return {
-            "error": f"Database query failed: {str(e)}",
+            "error": client_error(e, "A database error occurred while running your query."),
             "filters": filters,
         }

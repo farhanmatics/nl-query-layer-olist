@@ -29,6 +29,27 @@ class Settings(BaseSettings):
 
     allowed_origins: str = "http://localhost:3000,http://localhost:5173"
 
+    # Phase 2 audit log: one JSON line per request for trust/verification.
+    audit_log_enabled: bool = True
+    audit_log_path: str = "logs/audit.jsonl"
+
+    # Hardening: never leak raw exception/DB internals to the client by default.
+    # Flip on in dev to surface the real error text in API responses.
+    expose_internal_errors: bool = False
+
+    # Hardening: bound request size to reject oversized questions (basic DoS).
+    max_question_length: int = 2000
+
+    # Hardening: global row cap — any query returning more than this is rejected
+    # at the query layer. Functions that legitimately return many rows (list_orders,
+    # top_products) already paginate/limit below this threshold.
+    max_result_rows: int = 200
+
+    # Hardening: simple in-memory rate limiter (requests per minute per IP).
+    # Set to 0 to disable. Not a replacement for a real reverse-proxy limiter
+    # in production, but sufficient for single-tenant local/VPS deployments.
+    rate_limit_per_minute: int = 30
+
     class Config:
         env_file = ".env"
         case_sensitive = False

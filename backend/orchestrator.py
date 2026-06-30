@@ -3,8 +3,11 @@ import json
 import logging
 import httpx
 from datetime import datetime
+from typing import Optional
 from config import settings
 from cache import translation_cache, translation_key
+from errors import client_error
+from validation.scope import detect_unsupported_concept
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +24,25 @@ async def process_question(question: str):
     """
     try:
         logger.info(f"Starting orchestration for: {question}")
+
+        # Out-of-scope guard: decline concepts the schema can't answer (returns,
+        # refunds, profit, inventory, ...) instead of letting the model map them
+        # onto a proxy and return a confidently wrong number.
+        unsupported = detect_unsupported_concept(question)
+        if unsupported:
+            logger.info(f"Declining unsupported concept: {unsupported['concept']}")
+            return {
+                "error": (
+                    f"This dataset doesn't track {unsupported['concept']}. "
+                    f"{unsupported['suggestion']}"
+                ),
+                "operation": None,
+                "filters": None,
+                "result": None,
+                "formatted_answer": None,
+                "source": None,
+                "cached": False,
+            }
 
         from functions.registry import get_all_schemas
 
@@ -63,7 +85,28 @@ async def process_question(question: str):
             }
 
         tool_name = tool_call.get("tool")
-        args = tool_call.get("args", {})
+        args = dict(tool_call.get("args", {}) or {})
+
+        # Filter-faithfulness guard: catch filters the model dropped before they
+        # turn into a confidently wrong answer (see validation/faithfulness.py).
+        guard = apply_filter_guard(question, tool_name, args)
+        if guard.get("unresolved"):
+            missing = ", ".join(guard["unresolved"])
+            return {
+                "error": (
+                    f"Your question references {missing}, but this type of query "
+                    "can't be filtered by that, so I won't return a number that "
+                    "ignores it. Try rephrasing (e.g. ask for a count or revenue "
+                    "for that location)."
+                ),
+                "operation": tool_name,
+                "filters": args,
+                "result": None,
+                "formatted_answer": None,
+                "source": None,
+                "cached": from_cache,
+                "guard": guard,
+            }
 
         result = await dispatch_function(tool_name, args)
 
@@ -76,6 +119,7 @@ async def process_question(question: str):
                 "formatted_answer": None,
                 "source": None,
                 "cached": from_cache,
+                "guard": guard,
             }
 
         formatted_answer = await format_answer(tool_name, result)
@@ -88,12 +132,13 @@ async def process_question(question: str):
             "source": get_source_citation(tool_name),
             "error": None,
             "cached": from_cache,
+            "guard": guard,
         }
 
     except Exception as e:
         logger.error(f"Orchestration failed: {e}", exc_info=True)
         return {
-            "error": str(e),
+            "error": client_error(e, "The query could not be processed."),
             "operation": None,
             "filters": None,
             "result": None,
@@ -275,6 +320,36 @@ async def call_llm_for_tool(question: str, system_prompt: str) -> dict:
     return {"error": last_error}
 
 
+def apply_filter_guard(question: str, tool_name: str, args: dict) -> dict:
+    """Run the faithfulness guard for a tool call and repair the args in place.
+
+    Looks up which parameters the chosen tool accepts, detects filters that are
+    present in the question but missing from the model's args, and merges any
+    safe repairs into `args`. Returns the guard report ({applied, unresolved})
+    for auditability; on any internal error it degrades to a no-op so a guard
+    bug can never block an otherwise-valid query.
+    """
+    try:
+        from functions.registry import get_function
+        from validation.cities import get_known_cities
+        from validation.faithfulness import check_filter_faithfulness
+
+        schema = get_function(tool_name)["schema"]
+        supported = set(schema.get("parameters", {}).get("properties", {}).keys())
+    except Exception:
+        return {"applied": [], "unresolved": []}
+
+    report = check_filter_faithfulness(
+        question, supported, args, get_known_cities()
+    )
+    if report["repairs"]:
+        args.update(report["repairs"])
+        logger.info(
+            f"Faithfulness guard repaired dropped filters: {report['applied']}"
+        )
+    return {"applied": report["applied"], "unresolved": report["unresolved"]}
+
+
 async def dispatch_function(tool_name: str, args: dict) -> dict:
     """Dispatch to a specific function handler."""
     try:
@@ -291,10 +366,10 @@ async def dispatch_function(tool_name: str, args: dict) -> dict:
         return {"error": f"Unknown tool: {tool_name}"}
     except TypeError as e:
         logger.error(f"Invalid arguments for {tool_name}: {e}")
-        return {"error": f"Invalid arguments: {str(e)}"}
+        return {"error": client_error(e, "The request could not be processed with the given arguments.")}
     except Exception as e:
         logger.error(f"Function execution failed: {e}", exc_info=True)
-        return {"error": f"Function failed: {str(e)}"}
+        return {"error": client_error(e, "The query could not be completed.")}
 
 
 async def format_answer(tool_name: str, result: dict) -> str:
@@ -361,9 +436,52 @@ async def format_answer(tool_name: str, result: dict) -> str:
     return "Query executed successfully."
 
 
+def _format_date_range(value) -> Optional[str]:
+    """Render a [start_iso, end_iso] pair as a human-readable range.
+
+    Examples: "Jul 1–31, 2018" (same month), "Jul 1 – Aug 5, 2018" (same year),
+    "Dec 1, 2017 – Jan 31, 2018" (spans years). Returns None if unparseable.
+    """
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        return None
+    try:
+        start = datetime.fromisoformat(str(value[0]))
+        end = datetime.fromisoformat(str(value[1]))
+    except (ValueError, TypeError):
+        return None
+    if start.year == end.year and start.month == end.month and start.day == end.day:
+        return f"{start:%b} {start.day}, {start.year}"
+    if start.year == end.year and start.month == end.month:
+        return f"{start:%b} {start.day}–{end.day}, {start.year}"
+    if start.year == end.year:
+        return f"{start:%b} {start.day} – {end:%b} {end.day}, {start.year}"
+    return f"{start:%b} {start.day}, {start.year} – {end:%b} {end.day}, {end.year}"
+
+
 def _filter_str(filters: dict) -> str:
-    """Render a compact 'k: v' summary of non-empty filters."""
-    return " ".join(f"{k}: {v}" for k, v in (filters or {}).items() if v)
+    """Render a clean, human-readable summary of the active filters.
+
+    Drops structural/pagination keys, title-cases city names, formats the date
+    range as a readable span, and omits the raw key labels so the result reads
+    naturally inside an answer sentence.
+    """
+    parts = []
+    for key, value in (filters or {}).items():
+        if value in (None, "", [], {}):
+            continue
+        if key in ("limit", "offset", "by", "group_by"):
+            continue
+        if key == "date_range":
+            rendered = _format_date_range(value)
+            if rendered:
+                parts.append(rendered)
+        elif key == "city":
+            parts.append(str(value).title())
+        elif key == "score_max":
+            parts.append(f"score ≤ {value}")
+        else:
+            parts.append(str(value))
+    return ", ".join(parts)
 
 
 def get_source_citation(tool_name: str) -> str:

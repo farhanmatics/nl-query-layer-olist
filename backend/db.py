@@ -9,6 +9,18 @@ logger = logging.getLogger(__name__)
 _pool: Optional[Pool] = None
 
 
+class RowCapExceeded(Exception):
+    """Raised when a query returns more rows than the global cap."""
+
+    def __init__(self, row_count: int, cap: int):
+        self.row_count = row_count
+        self.cap = cap
+        super().__init__(
+            f"Query returned {row_count} rows, exceeding the {cap}-row cap. "
+            "Use aggregation or pagination to narrow results."
+        )
+
+
 async def get_pool() -> Pool:
     global _pool
     if _pool is None:
@@ -41,11 +53,19 @@ async def check_db_health() -> bool:
         return False
 
 
-async def execute_query(query: str, *args) -> list[dict]:
+async def execute_query(query: str, *args, enforce_cap: bool = True) -> list[dict]:
+    """Run a read query and return rows as dicts.
+
+    The global row cap guards *user-facing* result sets (what could flow into the
+    model context). Trusted internal bulk reads that legitimately exceed the cap
+    — e.g. loading the full city dictionary at startup — pass enforce_cap=False.
+    """
     pool = await get_pool()
     async with pool.acquire() as conn:
         await conn.execute(f"SET statement_timeout = {settings.db_statement_timeout}")
         rows = await conn.fetch(query, *args)
+        if enforce_cap and len(rows) > settings.max_result_rows:
+            raise RowCapExceeded(len(rows), settings.max_result_rows)
         return [dict(row) for row in rows]
 
 

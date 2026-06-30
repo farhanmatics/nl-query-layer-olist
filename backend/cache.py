@@ -91,14 +91,22 @@ def _normalize_question(question: str) -> str:
     return " ".join(question.strip().lower().split()).rstrip("?.! ")
 
 
-def translation_key(question: str, system_prompt: str) -> str:
-    """Stable cache key over (system prompt, normalized question).
+def translation_key(
+    question: str, system_prompt: str, model: Optional[str] = None
+) -> str:
+    """Stable cache key over (model, system prompt, normalized question).
 
     Hashing the system prompt ties each cached translation to the exact tool
     library / few-shots / role-scope that produced it, so a prompt change is a
-    free, automatic invalidation.
+    free, automatic invalidation. The model name is also part of the key:
+    different models translate the same question differently, so a cached
+    tool call from one model must never be served for another.
     """
+    if model is None:
+        model = settings.ollama_model
     h = hashlib.sha256()
+    h.update(model.encode("utf-8"))
+    h.update(b"\x00")
     h.update(system_prompt.encode("utf-8"))
     h.update(b"\x00")
     h.update(_normalize_question(question).encode("utf-8"))

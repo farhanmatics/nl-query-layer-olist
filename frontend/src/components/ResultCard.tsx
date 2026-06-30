@@ -1,129 +1,337 @@
-import { QueryResponse } from '../api'
+import { QueryResponse, GuardReport } from '../api'
 
-interface ResultCardProps {
-  response: QueryResponse
+/* ---------- formatting helpers ---------- */
+
+const num = (v: unknown): number => (typeof v === 'number' ? v : Number(v) || 0)
+const str = (v: unknown): string => (v == null ? '' : String(v))
+
+const fmtInt = (v: unknown) => num(v).toLocaleString('en-US')
+const fmtBRL = (v: unknown) =>
+  num(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 2 })
+
+const fmtDate = (iso: unknown) => {
+  const s = str(iso)
+  if (!s) return '—'
+  const d = new Date(s)
+  return isNaN(d.getTime()) ? s : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
-export function ResultCard({ response }: ResultCardProps) {
-  if (response.error) {
-    return (
-      <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-4">
-        <div className="text-red-700 font-semibold">⚠️ Error</div>
-        <div className="text-red-600 text-sm mt-1">{response.error}</div>
-      </div>
-    )
-  }
+const fmtDateRange = (range: unknown) => {
+  if (!Array.isArray(range) || range.length < 2) return str(range)
+  return `${fmtDate(range[0])} – ${fmtDate(range[1])}`
+}
 
-  const { operation, result, formatted_answer, source, filters } = response
+/* ---------- root ---------- */
 
-  // Render based on operation type
-  if (operation === 'get_order_status' && result) {
-    return (
-      <div className="bg-white border border-gray-200 rounded-lg p-6 mb-4 shadow-sm">
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">Order Details</h3>
-        <div className="space-y-3">
-          <Field label="Order ID" value={result.order_id as string} />
-          <Field
-            label="Status"
-            value={
-              <span className="inline-block px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-sm font-medium">
-                {result.order_status as string}
-              </span>
-            }
-          />
-          <Field label="Customer" value={`${result.customer_city}, ${result.customer_state}`} />
-          <Field
-            label="Purchased"
-            value={new Date(result.order_purchase_timestamp as string).toLocaleDateString()}
-          />
-          {result.order_delivered_customer_date && (
-            <Field
-              label="Delivered"
-              value={new Date(result.order_delivered_customer_date as string).toLocaleDateString()}
-            />
-          )}
-        </div>
-      </div>
-    )
-  }
+export function ResultCard({ response }: { response: QueryResponse }) {
+  if (response.error) return null // error is rendered in the message bubble
 
-  if (operation === 'count_orders' && result) {
-    return (
-      <div className="bg-white border border-gray-200 rounded-lg p-6 mb-4 shadow-sm">
-        <div className="text-center">
-          <div className="text-5xl font-bold text-blue-600 mb-2">
-            {(result.count as number).toLocaleString()}
-          </div>
-          <div className="text-gray-600 text-lg mb-4">
-            {result.count === 1 ? 'order' : 'orders'}
-          </div>
-          {formatted_answer && (
-            <div className="text-gray-700 italic mb-4">{formatted_answer}</div>
-          )}
-        </div>
-        {filters && <FiltersSummary filters={filters} />}
-        {source && <Citation source={source} />}
-      </div>
-    )
-  }
+  const op = response.operation
+  const result = (response.result ?? {}) as Record<string, unknown>
+  const filters = (response.filters ?? {}) as Record<string, unknown>
 
-  // Default: show formatted answer or full result
+  let body: React.ReactNode = null
+
+  if (op === 'get_order_status') body = <OrderDetail result={result} />
+  else if (op === 'count_orders') body = <StatCard value={fmtInt(result.count)} unit={num(result.count) === 1 ? 'order' : 'orders'} />
+  else if (op === 'count_low_reviews')
+    body = <StatCard value={fmtInt(result.count)} unit="low reviews" tone="rose" />
+  else if (op === 'get_revenue') body = <RevenueView result={result} />
+  else if (op === 'top_products') body = <TopProducts result={result} />
+  else if (op === 'list_orders') body = <OrdersTable result={result} />
+  else body = <pre className="overflow-x-auto rounded-lg bg-slate-50 p-3 text-xs text-slate-600">{JSON.stringify(result, null, 2)}</pre>
+
   return (
-    <div className="bg-white border border-gray-200 rounded-lg p-6 mb-4 shadow-sm">
-      {formatted_answer && (
-        <div className="text-gray-700 mb-4">{formatted_answer}</div>
-      )}
-      {result && Object.keys(result).length > 0 && (
-        <div className="bg-gray-50 border border-gray-200 rounded p-3 mb-4 overflow-x-auto">
-          <pre className="text-sm text-gray-700">
-            {JSON.stringify(result, null, 2)}
-          </pre>
-        </div>
-      )}
-      {filters && <FiltersSummary filters={filters} />}
-      {source && <Citation source={source} />}
+    <div className="mt-2.5 max-w-xl overflow-hidden rounded-xl border border-slate-200 bg-white shadow-soft">
+      <div className="p-4">{body}</div>
+      <CardFooter filters={filters} source={response.source} guard={response.guard} cached={response.cached} />
     </div>
   )
 }
 
-function Field({ label, value }: { label: string; value: React.ReactNode }) {
+/* ---------- per-operation views ---------- */
+
+function StatCard({ value, unit, tone = 'brand' }: { value: string; unit: string; tone?: 'brand' | 'rose' }) {
+  const color = tone === 'rose' ? 'text-rose-600' : 'text-brand-600'
   return (
-    <div className="flex justify-between items-center">
-      <label className="font-medium text-gray-700">{label}:</label>
-      <span className="text-gray-900">{value}</span>
+    <div className="py-2 text-center">
+      <div className={`text-5xl font-bold tracking-tight ${color}`}>{value}</div>
+      <div className="mt-1 text-sm font-medium text-slate-500">{unit}</div>
     </div>
   )
 }
 
-function FiltersSummary({ filters }: { filters: Record<string, unknown> }) {
-  const hasFilters = Object.keys(filters).some(k => filters[k])
-  if (!hasFilters) return null
+function RevenueView({ result }: { result: Record<string, unknown> }) {
+  const breakdown = result.breakdown as Array<Record<string, unknown>> | undefined
+  if (Array.isArray(breakdown)) {
+    const groupBy = str(result.group_by) || 'group'
+    const rows = breakdown.map(r => ({ label: str(r[groupBy]) || '—', value: num(r.revenue) }))
+    return (
+      <div>
+        <SectionLabel>Revenue by {groupBy}</SectionLabel>
+        <BarList rows={rows} format={fmtBRL} />
+      </div>
+    )
+  }
+  return <StatCard value={fmtBRL(result.revenue)} unit="total revenue" />
+}
+
+function TopProducts({ result }: { result: Record<string, unknown> }) {
+  const by = str(result.by) || 'count'
+  const products = (result.products as Array<Record<string, unknown>>) || []
+  const rows = products.map(p => ({
+    label: str(p.category) || str(p.product_id).slice(0, 10),
+    value: num(p.value),
+  }))
+  return (
+    <div>
+      <SectionLabel>Top {rows.length} products by {by === 'revenue' ? 'revenue' : 'units sold'}</SectionLabel>
+      <BarList rows={rows} format={by === 'revenue' ? fmtBRL : fmtInt} ranked />
+    </div>
+  )
+}
+
+function OrdersTable({ result }: { result: Record<string, unknown> }) {
+  const orders = (result.orders as Array<Record<string, unknown>>) || []
+  const total = num(result.total_count)
+  const offset = num(result.offset)
+  return (
+    <div>
+      <SectionLabel>
+        Showing {orders.length} of {fmtInt(total)} orders
+        {total > orders.length ? ` (from #${offset + 1})` : ''}
+      </SectionLabel>
+      <div className="-mx-1 mt-1 overflow-x-auto">
+        <table className="w-full text-left text-xs">
+          <thead className="text-slate-400">
+            <tr className="border-b border-slate-100">
+              <th className="px-2 py-1.5 font-medium">Order</th>
+              <th className="px-2 py-1.5 font-medium">Status</th>
+              <th className="px-2 py-1.5 font-medium">Location</th>
+              <th className="px-2 py-1.5 font-medium">Purchased</th>
+            </tr>
+          </thead>
+          <tbody>
+            {orders.map((o, i) => (
+              <tr key={i} className="border-b border-slate-50 last:border-0">
+                <td className="px-2 py-1.5 font-mono text-slate-500">{str(o.order_id).slice(0, 8)}…</td>
+                <td className="px-2 py-1.5"><StatusBadge status={str(o.order_status)} /></td>
+                <td className="px-2 py-1.5 text-slate-600">
+                  {str(o.customer_city) || '—'}{o.customer_state ? `, ${str(o.customer_state).toUpperCase()}` : ''}
+                </td>
+                <td className="px-2 py-1.5 text-slate-500">{fmtDate(o.order_purchase_timestamp)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+function OrderDetail({ result }: { result: Record<string, unknown> }) {
+  const dates = [
+    { label: 'Purchased', value: result.order_purchase_timestamp },
+    { label: 'Est. delivery', value: result.order_estimated_delivery_date },
+    { label: 'Delivered', value: result.order_delivered_customer_date },
+  ].filter(d => d.value)
+  return (
+    <div>
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-[11px] uppercase tracking-wide text-slate-400">Order</div>
+          <div className="truncate font-mono text-sm text-slate-700">{str(result.order_id)}</div>
+        </div>
+        <StatusBadge status={str(result.order_status)} large />
+      </div>
+      <div className="mt-3 flex items-center gap-1.5 text-sm text-slate-600">
+        <PinIcon />
+        {str(result.customer_city) || 'Unknown'}
+        {result.customer_state ? `, ${str(result.customer_state).toUpperCase()}` : ''}
+      </div>
+      {dates.length > 0 && (
+        <div className="mt-3 grid grid-cols-3 gap-2 border-t border-slate-100 pt-3">
+          {dates.map(d => (
+            <div key={d.label}>
+              <div className="text-[11px] text-slate-400">{d.label}</div>
+              <div className="text-xs font-medium text-slate-700">{fmtDate(d.value)}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/* ---------- shared primitives ---------- */
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return <div className="mb-2 text-sm font-semibold text-slate-700">{children}</div>
+}
+
+function BarList({
+  rows,
+  format,
+  ranked = false,
+}: {
+  rows: { label: string; value: number }[]
+  format: (v: number) => string
+  ranked?: boolean
+}) {
+  const max = Math.max(...rows.map(r => r.value), 1)
+  return (
+    <div className="space-y-2">
+      {rows.map((r, i) => (
+        <div key={i} className="flex items-center gap-2.5">
+          {ranked && (
+            <span className="w-4 shrink-0 text-right text-xs font-semibold text-slate-300">{i + 1}</span>
+          )}
+          <div className="min-w-0 flex-1">
+            <div className="mb-0.5 flex items-baseline justify-between gap-2">
+              <span className="truncate text-xs font-medium text-slate-600">{r.label}</span>
+              <span className="shrink-0 text-xs font-semibold tabular-nums text-slate-800">{format(r.value)}</span>
+            </div>
+            <div className="h-1.5 overflow-hidden rounded-full bg-slate-100">
+              <div
+                className="h-full origin-left animate-grow-bar rounded-full bg-gradient-to-r from-brand-400 to-brand-600"
+                style={{ width: `${Math.max((r.value / max) * 100, 2)}%` }}
+              />
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+const STATUS_TONES: Record<string, string> = {
+  delivered: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
+  shipped: 'bg-sky-50 text-sky-700 ring-sky-200',
+  canceled: 'bg-rose-50 text-rose-700 ring-rose-200',
+  unavailable: 'bg-slate-100 text-slate-600 ring-slate-200',
+  processing: 'bg-amber-50 text-amber-700 ring-amber-200',
+  invoiced: 'bg-violet-50 text-violet-700 ring-violet-200',
+  approved: 'bg-teal-50 text-teal-700 ring-teal-200',
+  created: 'bg-slate-100 text-slate-600 ring-slate-200',
+}
+
+function StatusBadge({ status, large = false }: { status: string; large?: boolean }) {
+  const tone = STATUS_TONES[status.toLowerCase()] || 'bg-slate-100 text-slate-600 ring-slate-200'
+  return (
+    <span
+      className={`inline-flex items-center rounded-full font-medium capitalize ring-1 ${tone} ${
+        large ? 'px-3 py-1 text-sm' : 'px-2 py-0.5 text-[11px]'
+      }`}
+    >
+      {status || 'unknown'}
+    </span>
+  )
+}
+
+/* ---------- footer: filters + trust signals ---------- */
+
+function CardFooter({
+  filters,
+  source,
+  guard,
+  cached,
+}: {
+  filters: Record<string, unknown>
+  source: string | null
+  guard?: GuardReport | null
+  cached?: boolean
+}) {
+  const chips = buildFilterChips(filters)
+  const guarded = guard?.applied && guard.applied.length > 0
+  const hasFooter = chips.length > 0 || source || guarded || cached
+  if (!hasFooter) return null
 
   return (
-    <details className="mt-4 pt-4 border-t border-gray-200">
-      <summary className="cursor-pointer text-sm font-medium text-gray-600 hover:text-gray-900">
-        Applied filters
-      </summary>
-      <div className="mt-2 space-y-1">
-        {Object.entries(filters).map(
-          ([key, value]) =>
-            value && (
-              <div key={key} className="text-sm text-gray-600">
-                <strong>{key}:</strong> {String(value)}
-              </div>
-            ),
+    <div className="space-y-2 border-t border-slate-100 bg-slate-50/60 px-4 py-3">
+      {chips.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {chips.map(c => (
+            <span
+              key={c}
+              className="inline-flex items-center rounded-md bg-white px-2 py-0.5 text-[11px] font-medium text-slate-600 ring-1 ring-slate-200"
+            >
+              {c}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {guarded && (
+        <div className="flex items-start gap-1.5 text-[11px] text-amber-700">
+          <ShieldIcon />
+          <span>
+            <span className="font-medium">Auto-applied from your wording:</span>{' '}
+            <span className="font-mono">{guard!.applied.join(', ')}</span>
+          </span>
+        </div>
+      )}
+
+      <div className="flex items-center justify-between gap-2">
+        {source && (
+          <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-slate-400">
+            <VerifiedIcon />
+            <span className="truncate" title={source}>Verified from {source}</span>
+          </div>
+        )}
+        {cached && (
+          <span className="inline-flex shrink-0 items-center gap-1 rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500">
+            <BoltIcon /> cached
+          </span>
         )}
       </div>
-    </details>
+    </div>
   )
 }
 
-function Citation({ source }: { source: string }) {
+function buildFilterChips(filters: Record<string, unknown>): string[] {
+  const chips: string[] = []
+  const f = filters || {}
+  if (f.city) chips.push(`City: ${titleCase(str(f.city))}`)
+  if (f.state) chips.push(`State: ${str(f.state).toUpperCase()}`)
+  if (f.status) chips.push(`Status: ${str(f.status)}`)
+  if (f.category) chips.push(`Category: ${str(f.category)}`)
+  if (f.score_max != null) chips.push(`Score ≤ ${str(f.score_max)}`)
+  if (f.date_range) chips.push(`📅 ${fmtDateRange(f.date_range)}`)
+  return chips
+}
+
+const titleCase = (s: string) => s.replace(/\b\w/g, c => c.toUpperCase())
+
+/* ---------- icons ---------- */
+
+function PinIcon() {
   return (
-    <div className="mt-4 pt-4 border-t border-gray-200">
-      <small className="text-gray-500">
-        <strong>Source:</strong> {source}
-      </small>
-    </div>
+    <svg viewBox="0 0 24 24" className="h-4 w-4 text-slate-400" fill="none">
+      <path d="M12 21s7-5.5 7-11a7 7 0 1 0-14 0c0 5.5 7 11 7 11Z" stroke="currentColor" strokeWidth="1.6" />
+      <circle cx="12" cy="10" r="2.5" stroke="currentColor" strokeWidth="1.6" />
+    </svg>
+  )
+}
+function ShieldIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="mt-0.5 h-3.5 w-3.5 shrink-0" fill="none">
+      <path d="M12 3 5 6v5c0 4.4 3 7.6 7 9 4-1.4 7-4.6 7-9V6l-7-3Z" stroke="currentColor" strokeWidth="1.6" />
+      <path d="m9.5 12 1.8 1.8 3.2-3.6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  )
+}
+function VerifiedIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 shrink-0 text-emerald-500" fill="none">
+      <path d="M12 3 5 6v5c0 4.4 3 7.6 7 9 4-1.4 7-4.6 7-9V6l-7-3Z" stroke="currentColor" strokeWidth="1.6" />
+      <path d="m9.5 12 1.8 1.8 3.2-3.6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  )
+}
+function BoltIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-3 w-3" fill="currentColor">
+      <path d="M13 2 4 14h6l-1 8 9-12h-6l1-8Z" />
+    </svg>
   )
 }

@@ -31,7 +31,8 @@ async def load_known_cities() -> set[str]:
 
     try:
         rows = await execute_query(
-            "SELECT DISTINCT customer_city FROM olist_customers_dataset WHERE customer_city IS NOT NULL"
+            "SELECT DISTINCT customer_city FROM olist_customers_dataset WHERE customer_city IS NOT NULL",
+            enforce_cap=False,  # trusted internal dictionary load (~4k cities)
         )
         _known_cities = {normalize(row["customer_city"]) for row in rows}
         logger.info(f"Loaded {len(_known_cities)} unique cities from database")
@@ -40,6 +41,16 @@ async def load_known_cities() -> set[str]:
         logger.error(f"Failed to load cities: {e}")
         _known_cities = set()
         return _known_cities
+
+
+def get_known_cities() -> set[str]:
+    """Synchronous accessor for the already-loaded known-city set.
+
+    Returns the set loaded at startup by load_known_cities(), or an empty set if
+    it hasn't been loaded yet. Used by the faithfulness guard, which must run
+    synchronously inside the orchestration path without touching the DB.
+    """
+    return _known_cities or set()
 
 
 async def resolve_city(city_input: str) -> Optional[str]:
