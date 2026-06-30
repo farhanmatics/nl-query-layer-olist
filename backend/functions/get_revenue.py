@@ -2,6 +2,7 @@ import logging
 from typing import Optional
 from db import execute_scalar, execute_query
 from validation.dates import parse_date_range
+from validation.cities import resolve_city
 from config import settings
 from errors import client_error
 
@@ -12,9 +13,9 @@ VALID_GROUP_BY = {"state", "category", "month"}
 SCHEMA = {
     "name": "get_revenue",
     "description": (
-        "Total revenue, optionally filtered by date range, customer state, or "
-        "product category, and optionally broken down (grouped) by state, "
-        "category, or month."
+        "Total revenue, optionally filtered by date range, customer city, "
+        "customer state, or product category, and optionally broken down "
+        "(grouped) by state, category, or month."
     ),
     "parameters": {
         "type": "object",
@@ -22,6 +23,10 @@ SCHEMA = {
             "date_token": {
                 "type": "string",
                 "description": "Date range token: today, yesterday, this_week, last_week, this_month, last_month, this_year, last_year",
+            },
+            "city": {
+                "type": "string",
+                "description": "Customer city, e.g. 'sao paulo', 'rio de janeiro' (will be normalized)",
             },
             "state": {
                 "type": "string",
@@ -44,6 +49,7 @@ SCHEMA = {
 
 async def execute(
     date_token: Optional[str] = None,
+    city: Optional[str] = None,
     state: Optional[str] = None,
     category: Optional[str] = None,
     group_by: Optional[str] = None,
@@ -67,6 +73,16 @@ async def execute(
                 "filters": filters,
             }
         filters["group_by"] = group_by
+
+    normalized_city = None
+    if city:
+        normalized_city = await resolve_city(city)
+        if not normalized_city:
+            return {
+                "error": f"City '{city}' not found in database",
+                "filters": {"city": city},
+            }
+        filters["city"] = normalized_city
 
     normalized_state = None
     if state:
@@ -121,6 +137,10 @@ async def execute(
         JOIN olist_orders_dataset o ON p.order_id = o.order_id
         LEFT JOIN olist_customers_dataset c ON o.customer_id = c.customer_id
         """
+
+    if normalized_city:
+        params.append(normalized_city)
+        conditions.append(f"c.customer_city = ${len(params)}")
 
     if normalized_state:
         params.append(normalized_state)

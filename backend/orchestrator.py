@@ -3,6 +3,7 @@ import json
 import logging
 import httpx
 from datetime import datetime
+from typing import Optional
 from config import settings
 from cache import translation_cache, translation_key
 from errors import client_error
@@ -93,8 +94,10 @@ async def process_question(question: str):
             missing = ", ".join(guard["unresolved"])
             return {
                 "error": (
-                    f"Your question seems to reference {missing}, but I couldn't "
-                    "apply it reliably. Please rephrase so the filter is explicit."
+                    f"Your question references {missing}, but this type of query "
+                    "can't be filtered by that, so I won't return a number that "
+                    "ignores it. Try rephrasing (e.g. ask for a count or revenue "
+                    "for that location)."
                 ),
                 "operation": tool_name,
                 "filters": args,
@@ -433,9 +436,52 @@ async def format_answer(tool_name: str, result: dict) -> str:
     return "Query executed successfully."
 
 
+def _format_date_range(value) -> Optional[str]:
+    """Render a [start_iso, end_iso] pair as a human-readable range.
+
+    Examples: "Jul 1–31, 2018" (same month), "Jul 1 – Aug 5, 2018" (same year),
+    "Dec 1, 2017 – Jan 31, 2018" (spans years). Returns None if unparseable.
+    """
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        return None
+    try:
+        start = datetime.fromisoformat(str(value[0]))
+        end = datetime.fromisoformat(str(value[1]))
+    except (ValueError, TypeError):
+        return None
+    if start.year == end.year and start.month == end.month and start.day == end.day:
+        return f"{start:%b} {start.day}, {start.year}"
+    if start.year == end.year and start.month == end.month:
+        return f"{start:%b} {start.day}–{end.day}, {start.year}"
+    if start.year == end.year:
+        return f"{start:%b} {start.day} – {end:%b} {end.day}, {start.year}"
+    return f"{start:%b} {start.day}, {start.year} – {end:%b} {end.day}, {end.year}"
+
+
 def _filter_str(filters: dict) -> str:
-    """Render a compact 'k: v' summary of non-empty filters."""
-    return " ".join(f"{k}: {v}" for k, v in (filters or {}).items() if v)
+    """Render a clean, human-readable summary of the active filters.
+
+    Drops structural/pagination keys, title-cases city names, formats the date
+    range as a readable span, and omits the raw key labels so the result reads
+    naturally inside an answer sentence.
+    """
+    parts = []
+    for key, value in (filters or {}).items():
+        if value in (None, "", [], {}):
+            continue
+        if key in ("limit", "offset", "by", "group_by"):
+            continue
+        if key == "date_range":
+            rendered = _format_date_range(value)
+            if rendered:
+                parts.append(rendered)
+        elif key == "city":
+            parts.append(str(value).title())
+        elif key == "score_max":
+            parts.append(f"score ≤ {value}")
+        else:
+            parts.append(str(value))
+    return ", ".join(parts)
 
 
 def get_source_citation(tool_name: str) -> str:

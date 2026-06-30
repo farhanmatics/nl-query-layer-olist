@@ -53,12 +53,18 @@ async def check_db_health() -> bool:
         return False
 
 
-async def execute_query(query: str, *args) -> list[dict]:
+async def execute_query(query: str, *args, enforce_cap: bool = True) -> list[dict]:
+    """Run a read query and return rows as dicts.
+
+    The global row cap guards *user-facing* result sets (what could flow into the
+    model context). Trusted internal bulk reads that legitimately exceed the cap
+    — e.g. loading the full city dictionary at startup — pass enforce_cap=False.
+    """
     pool = await get_pool()
     async with pool.acquire() as conn:
         await conn.execute(f"SET statement_timeout = {settings.db_statement_timeout}")
         rows = await conn.fetch(query, *args)
-        if len(rows) > settings.max_result_rows:
+        if enforce_cap and len(rows) > settings.max_result_rows:
             raise RowCapExceeded(len(rows), settings.max_result_rows)
         return [dict(row) for row in rows]
 

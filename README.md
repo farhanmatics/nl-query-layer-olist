@@ -391,7 +391,7 @@ Six core functions handle the majority of real-world questions:
 
 1. **`get_order_status(order_id)`** — Lookup a single order's status and key dates
 2. **`count_orders(city?, state?, status?, date_range?)`** — Count orders with filters
-3. **`get_revenue(date_range?, state?, category?, group_by?)`** — Sum payment values
+3. **`get_revenue(date_range?, city?, state?, category?, group_by?)`** — Sum payment values
 4. **`count_low_reviews(score_max=2, city?, date_range?)`** — Count low-scoring reviews (disputes analog)
 5. **`top_products(date_range?, limit=10, by='count'|'revenue')`** — Top-N products by count or revenue
 6. **`list_orders(filters, limit=20, offset=0)`** — Paginated order lookup

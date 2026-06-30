@@ -31,7 +31,8 @@ async def load_known_cities() -> set[str]:
 
     try:
         rows = await execute_query(
-            "SELECT DISTINCT customer_city FROM olist_customers_dataset WHERE customer_city IS NOT NULL"
+            "SELECT DISTINCT customer_city FROM olist_customers_dataset WHERE customer_city IS NOT NULL",
+            enforce_cap=False,  # trusted internal dictionary load (~4k cities)
         )
         _known_cities = {normalize(row["customer_city"]) for row in rows}
         logger.info(f"Loaded {len(_known_cities)} unique cities from database")

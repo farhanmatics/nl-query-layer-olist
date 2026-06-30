@@ -64,6 +64,28 @@ def test_unsupported_param_not_added():
     assert r["repairs"] == {}
 
 
+# --- unsupported geography must be refused, not silently dropped -------------
+
+def test_unsupported_state_is_unresolved():
+    # top_products can't filter by location → flag, don't ignore.
+    r = guard("top products in SP", {"date_token", "limit", "by"}, {})
+    assert r["repairs"] == {}
+    assert any("SP" in u for u in r["unresolved"])
+
+
+def test_unsupported_city_is_unresolved():
+    r = guard("top products in Campinas", {"date_token", "limit", "by"}, {})
+    assert r["repairs"] == {}
+    assert any("campinas" in u for u in r["unresolved"])
+
+
+def test_city_supported_is_repaired_not_unresolved():
+    # get_revenue now supports city → repair it, no refusal.
+    r = guard("revenue for Sao Paulo", {"date_token", "city", "state", "category"}, {})
+    assert r["repairs"].get("city") == "sao paulo"
+    assert r["unresolved"] == []
+
+
 # --- detectors in isolation --------------------------------------------------
 
 def test_known_city_detected():

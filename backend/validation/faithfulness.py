@@ -117,22 +117,32 @@ def check_filter_faithfulness(
     applied: list = []
     unresolved: list = []
 
-    if "state" in supported_params and not args.get("state"):
-        uf = _detect_state(question)
-        if uf:
-            repairs["state"] = uf
-            applied.append(f"state={uf}")
+    # Geography: if the question clearly names a place but the chosen tool can't
+    # filter by that dimension, we must NOT answer (a place-less total dressed up
+    # as a place-specific answer is the core failure mode). Repair when supported
+    # and missing; flag as unresolved when unsupported so the caller declines.
+    uf = _detect_state(question)
+    if uf:
+        if "state" in supported_params:
+            if not args.get("state"):
+                repairs["state"] = uf
+                applied.append(f"state={uf}")
+        else:
+            unresolved.append(f"state '{uf}'")
+
+    city = _detect_city(question, known_cities)
+    if city:
+        if "city" in supported_params:
+            if not args.get("city"):
+                repairs["city"] = city
+                applied.append(f"city={city}")
+        else:
+            unresolved.append(f"city '{city}'")
 
     if "date_token" in supported_params and not args.get("date_token"):
         date_val = _detect_date(question)
         if date_val is not None:
             repairs["date_token"] = date_val
             applied.append(f"date={date_val if isinstance(date_val, str) else 'range'}")
-
-    if "city" in supported_params and not args.get("city"):
-        city = _detect_city(question, known_cities)
-        if city:
-            repairs["city"] = city
-            applied.append(f"city={city}")
 
     return {"repairs": repairs, "applied": applied, "unresolved": unresolved}
