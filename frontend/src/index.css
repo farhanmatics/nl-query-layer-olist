@@ -2,6 +2,28 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Semantic color tokens (RGB triplets so Tailwind's <alpha-value> works).
+   Light is the default; .dark on <html> swaps the values. One token set drives
+   the whole app, so theming is a variable swap rather than per-element dark:. */
+:root {
+  --bg: 241 245 249;        /* slate-100 */
+  --surface: 255 255 255;   /* card / header / bubbles */
+  --inset: 248 250 252;     /* slate-50 — subtle fills inside a surface */
+  --content: 15 23 42;      /* slate-900 — primary text */
+  --muted: 100 116 139;     /* slate-500 — secondary text */
+  --line: 226 232 240;      /* slate-200 — borders */
+  color-scheme: light;
+}
+.dark {
+  --bg: 2 6 23;             /* slate-950 */
+  --surface: 15 23 42;      /* slate-900 */
+  --inset: 30 41 59;        /* slate-800 */
+  --content: 226 232 240;   /* slate-200 */
+  --muted: 148 163 184;     /* slate-400 */
+  --line: 30 41 59;         /* slate-800 */
+  color-scheme: dark;
+}
+
 html, body, #root {
   width: 100%;
   height: 100%;
@@ -11,20 +33,22 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+  background-color: rgb(var(--bg));
+  color: rgb(var(--content));
 }
 
-/* Quiet, modern scrollbar for the transcript */
+/* Quiet, modern scrollbar for the transcript — themed via tokens */
 .scroll-slim::-webkit-scrollbar {
   width: 10px;
 }
 .scroll-slim::-webkit-scrollbar-thumb {
-  background-color: rgb(203 213 225 / 0.8);
+  background-color: rgb(var(--line) / 0.9);
   border: 3px solid transparent;
   background-clip: content-box;
   border-radius: 9999px;
 }
 .scroll-slim::-webkit-scrollbar-thumb:hover {
-  background-color: rgb(148 163 184 / 0.9);
+  background-color: rgb(var(--muted) / 0.9);
 }
 .scroll-slim::-webkit-scrollbar-track {
   background: transparent;
