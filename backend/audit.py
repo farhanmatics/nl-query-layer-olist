@@ -115,10 +115,14 @@ def build_record(
     question: str,
     response: dict,
     latency_ms: int,
+    user_id: Optional[str] = None,
+    session_id: Optional[str] = None,
 ) -> dict:
     """Assemble the audit record from a ``process_question`` response dict.
 
-    Centralized so main.py stays thin and the field shape is tested in one place.
+    Centralized so main.py stays thin and the field shape is tested in one
+    place. B-X identity: every answer is attributable to a user and a
+    conversation (both nullable pre-auth).
     """
     guard = response.get("guard") or {}
     return {
@@ -133,6 +137,8 @@ def build_record(
         "guard_applied": guard.get("applied", []),
         "error": response.get("error"),
         "latency_ms": latency_ms,
+        "user_id": user_id,
+        "session_id": session_id,
     }
 
 

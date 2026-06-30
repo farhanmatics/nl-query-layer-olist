@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
@@ -79,6 +79,10 @@ class QueryRequest(BaseModel):
     # settings (configurable) so an oversized request is rejected with HTTP 422
     # before it ever reaches the model or DB (basic DoS hardening).
     question: str = Field(..., min_length=1)
+    # Optional B0 conversational session id. Absent = single-shot, no context.
+    # When present, the backend resolves this turn against the prior turn's
+    # state in the same session.
+    session_id: Optional[str] = Field(default=None, max_length=128)
 
     @field_validator("question")
     @classmethod
@@ -90,6 +94,18 @@ class QueryRequest(BaseModel):
         return v
 
 
+class ClarifyBlock(BaseModel):
+    prompt: str
+    options: list[str]
+
+
+class QueryContext(BaseModel):
+    inherited: bool = False
+    from_operation: Optional[str] = None
+    carried: dict = Field(default_factory=dict)
+    clarify: Optional[ClarifyBlock] = None
+
+
 class QueryResponse(BaseModel):
     operation: Optional[str] = None
     filters: Optional[dict] = None
@@ -99,6 +115,7 @@ class QueryResponse(BaseModel):
     error: Optional[str] = None
     cached: bool = False
     guard: Optional[dict] = None
+    context: Optional[QueryContext] = None
 
 
 class HealthResponse(BaseModel):
@@ -110,10 +127,93 @@ class HealthResponse(BaseModel):
 @app.on_event("startup")
 async def startup():
     logger.info("Starting up...")
+
+    # Production safety: refuse to boot with the placeholder session secret OR
+    # with insecure cookies — both would expose auth sessions. Hard-fail rather
+    # than warn, so a misconfigured prod deploy can't silently run unsafe.
+    from config import DEFAULT_SESSION_SECRET
+    if settings.is_production:
+        if settings.session_secret == DEFAULT_SESSION_SECRET:
+            raise RuntimeError(
+                "SESSION_SECRET is still the default in a production environment. "
+                "Set a strong, unique SESSION_SECRET in the environment before boot."
+            )
+        if not settings.cookie_secure:
+            raise RuntimeError(
+                "COOKIE_SECURE is false in a production environment — auth cookies "
+                "would ride over plaintext HTTP. Set COOKIE_SECURE=true (behind "
+                "HTTPS) before boot."
+            )
+
     pool = await get_pool()
     logger.info("Database pool initialized")
-    await load_known_cities()
-    logger.info("Known cities loaded for validation")
+
+    # Phase 3 — load the active schema config first. Everything else
+    # (cities, categories, function registry, prompt) reads from it.
+    from schemas import get_active_config
+    schema_cfg = get_active_config()
+    logger.info(
+        f"Active schema: {schema_cfg.name!r} "
+        f"({schema_cfg.display_name}) "
+        f"tables={len(schema_cfg.tables)} columns={len(schema_cfg.columns)}"
+    )
+
+    cities = await load_known_cities()
+    logger.info(f"Known cities loaded for validation: {len(cities)}")
+    from validation.detectors import set_known_cities
+    set_known_cities(cities)
+
+    from validation.categories import load_known_categories
+    from validation.detectors import set_known_categories
+    categories = await load_known_categories()
+    logger.info(f"Known categories loaded for validation: {len(categories)}")
+    set_known_categories(categories)
+
+    # App-state DB (B1/B2). Migrations are applied here so the boot path is
+    # self-contained: a fresh checkout with no DB applied yet just works.
+    from appdb import get_conn, cleanup_expired_sessions
+    from migrate_app import MIGRATIONS_DIR
+    from config import settings as _settings
+    import aiosqlite as _aiosqlite
+    import os as _os
+    from pathlib import Path as _Path
+    # Apply pending migrations against the app-state DB.
+    parent = _os.path.dirname(
+        _appdb_url_to_path(_settings.app_db_url)
+    )
+    if parent:
+        _os.makedirs(parent, exist_ok=True)
+    conn = await get_conn()
+    await conn.execute(
+        "CREATE TABLE IF NOT EXISTS schema_migrations ("
+        "  version text PRIMARY KEY,"
+        "  applied_at TEXT NOT NULL"
+        ")"
+    )
+    async with conn.execute("SELECT version FROM schema_migrations") as cur:
+        applied = {r[0] for r in await cur.fetchall()}
+    for f in sorted(_Path(MIGRATIONS_DIR).glob("*.sql")):
+        if f.stem in applied:
+            continue
+        await conn.execute("BEGIN")
+        await conn.executescript(f.read_text())
+        await conn.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+            (f.stem, datetime.utcnow().isoformat()),
+        )
+        await conn.commit()
+        logger.info(f"App-state migration applied: {f.name}")
+    expired = await cleanup_expired_sessions()
+    if expired:
+        logger.info(f"Cleaned up {expired} expired auth session(s)")
+
+
+def _appdb_url_to_path(url: str) -> str:
+    if url.startswith("sqlite:///"):
+        return url[len("sqlite:///"):]
+    if url.startswith("sqlite://"):
+        return url[len("sqlite://"):]
+    return url
 
 
 @app.on_event("shutdown")
@@ -121,6 +221,17 @@ async def shutdown():
     logger.info("Shutting down...")
     await close_pool()
     logger.info("Database pool closed")
+    from appdb import close_conn
+    await close_conn()
+
+
+# Auth routes (B2). Cookie session + CSRF, see auth_routes.py for the contract.
+from auth_routes import router as auth_router, require_user as _require_user
+app.include_router(auth_router)
+
+# Chat session routes (B3). IDOR-safe via require_owned_session.
+from session_routes import router as session_router
+app.include_router(session_router)
 
 
 @app.get("/api/health", response_model=HealthResponse)
@@ -136,30 +247,64 @@ async def health_check():
 
 
 @app.post("/api/query", response_model=QueryResponse)
-async def query(request: QueryRequest):
+async def query(request: Request, body: QueryRequest):
     request_id = uuid.uuid4().hex
     start = time.perf_counter()
-    try:
-        logger.info(f"Processing query: {request.question}")
-        from orchestrator import process_question
+    # B-X: capture identity for the audit log if the caller is authed.
+    # `require_user` raises 401 if the cookie is missing/invalid, which is
+    # the wrong default for /api/query (it should still work anon while
+    # B2 is rolling out). Use the resolve dependency instead.
+    from auth_routes import _resolve_session
+    user = await _resolve_session(request.cookies.get("nlq_session"))
+    user_id = user["id"] if user else None
 
-        response_dict = await process_question(request.question)
-    except RowCapExceeded as e:
-        logger.warning(f"Row cap exceeded: {e}")
-        response_dict = {
-            "error": (
-                f"Query returned too many rows ({e.row_count}). "
-                "Please narrow your filters or use pagination."
+    # B3: when the caller is authed AND a session_id is provided, verify
+    # ownership before we hand it to the orchestrator. A cross-user
+    # session_id is treated as "doesn't exist" — never a leak. When user_id
+    # is None, fall through: the session_id is treated as a client-minted
+    # UUID (F2-early mode) and the orchestrator uses its B0 in-memory store.
+    cross_user = False
+    if user_id and body.session_id:
+        import appdb
+        cross_user = not await appdb.session_belongs_to_user(body.session_id, user_id)
+
+    if cross_user:
+        # Rejected IDOR attempt. Skip the orchestrator entirely (no rows
+        # written) but still fall through to the audit tail below — a
+        # cross-user session id is exactly what belongs in the security log.
+        logger.warning(f"Cross-user session_id rejected for user {user_id}")
+        response_dict = {"error": "Session not found"}
+    else:
+        try:
+            logger.info(f"Processing query: {body.question}")
+            from orchestrator import process_question
+
+            response_dict = await process_question(
+                body.question, body.session_id, user_id=user_id
             )
-        }
-    except Exception as e:
-        logger.error(f"Query failed: {e}", exc_info=True)
-        response_dict = {"error": client_error(e, "The query could not be processed.")}
+        except RowCapExceeded as e:
+            logger.warning(f"Row cap exceeded: {e}")
+            response_dict = {
+                "error": (
+                    f"Query returned too many rows ({e.row_count}). "
+                    "Please narrow your filters or use pagination."
+                )
+            }
+        except Exception as e:
+            logger.error(f"Query failed: {e}", exc_info=True)
+            response_dict = {"error": client_error(e, "The query could not be processed.")}
 
     latency_ms = int((time.perf_counter() - start) * 1000)
     if settings.audit_log_enabled:
         audit_logger.log(
-            build_record(request_id, request.question, response_dict, latency_ms)
+            build_record(
+                request_id,
+                body.question,
+                response_dict,
+                latency_ms,
+                user_id=user_id,
+                session_id=body.session_id,
+            )
         )
     return QueryResponse(**response_dict)
 
@@ -173,8 +318,11 @@ async def cache_stats():
 
 
 @app.post("/api/cache/clear")
-async def cache_clear():
-    """Flush the translation cache (e.g. after changing the prompt manually)."""
+async def cache_clear(_user: dict = Depends(_require_user)):
+    """Flush the translation cache (e.g. after changing the prompt manually).
+
+    Mutating + global-impact, so it requires an authenticated user.
+    """
     from cache import translation_cache
 
     translation_cache.clear()
@@ -213,8 +361,11 @@ class EvalResponse(BaseModel):
 
 
 @app.post("/api/eval", response_model=EvalResponse)
-async def run_eval():
+async def run_eval(_user: dict = Depends(_require_user)):
     """Run the eval set and return pass/fail results for CI integration.
+
+    Heavy (many LLM calls) and so gated behind an authenticated user; CI must
+    authenticate (or call the eval harness directly) rather than hit this open.
 
     Loads eval_set.json, runs each case through the orchestrator, and scores
     tool-selection + filter faithfulness. Returns HTTP 200 regardless of pass

@@ -83,12 +83,23 @@ def test_build_record_has_expected_keys():
         "guard_applied",
         "error",
         "latency_ms",
+        "user_id",
+        "session_id",
     }
     assert rec["request_id"] == "abc123"
     assert rec["cached"] is True
     assert rec["guard_applied"] == ["state"]
     assert rec["result_summary"] == {"count": 7, "orders_count": 2}
     assert rec["latency_ms"] == 55
+    assert rec["user_id"] is None
+    assert rec["session_id"] is None
+
+
+def test_build_record_passes_user_and_session():
+    response = {"operation": "count_orders", "result": {"count": 1}}
+    rec = build_record("x", "q", response, 10, user_id="u-1", session_id="s-1")
+    assert rec["user_id"] == "u-1"
+    assert rec["session_id"] == "s-1"
 
 
 def test_build_record_handles_missing_guard_and_result():

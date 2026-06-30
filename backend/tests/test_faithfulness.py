@@ -102,3 +102,15 @@ def test_group_by_month_not_mistaken_for_date():
     # "by month" is a breakdown, not a date filter — no this/last qualifier.
     r = guard("Break down revenue by month", REVENUE_PARAMS, {"group_by": "month"})
     assert "date_token" not in r["repairs"]
+
+
+def test_invalid_status_qualifier_is_unresolved():
+    """Status-shaped word the schema doesn't track → refuse, not whole-dataset count."""
+    r = guard("How many completed orders?", COUNT_PARAMS, {})
+    assert r["repairs"] == {}
+    assert any("completed" in u for u in r["unresolved"])
+
+
+def test_invalid_status_not_flagged_when_model_supplied_status():
+    r = guard("How many delivered orders?", COUNT_PARAMS, {"status": "delivered"})
+    assert not any("delivered" in u for u in r["unresolved"])

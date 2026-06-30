@@ -63,6 +63,11 @@ class TTLCache:
             self.hits = 0
             self.misses = 0
 
+    def delete(self, key: str) -> bool:
+        """Remove a key. Returns True if the key existed."""
+        with self._lock:
+            return self._store.pop(key, None) is not None
+
     def stats(self) -> dict:
         with self._lock:
             total = self.hits + self.misses
