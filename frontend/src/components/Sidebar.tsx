@@ -194,7 +194,9 @@ function SessionRow({
   return (
     <li
       className={`group relative rounded-lg ${
-        isActive ? 'bg-brand-50 ring-1 ring-brand-200' : 'hover:bg-inset'
+        isActive
+          ? 'bg-brand-50 ring-1 ring-brand-200 dark:bg-brand-900/40 dark:ring-brand-700'
+          : 'hover:bg-inset'
       }`}
     >
       {editing ? (
