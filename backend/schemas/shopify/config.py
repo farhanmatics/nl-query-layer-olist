@@ -37,29 +37,32 @@ T_REFUNDS = "shopify_refunds"
 
 
 # --- Column references -------------------------------------------------------
+#
+# Same convention as Olist: ColumnRef stores the LOGICAL table name
+# (key into `tables` below). The factory's `table_for()` resolves it.
 
-COL_ORDER_ID = ColumnRef(T_ORDERS, "id")
-COL_ORDER_STATUS = ColumnRef(T_ORDERS, "financial_status")
-COL_ORDER_PURCHASE_TS = ColumnRef(T_ORDERS, "processed_at")
-COL_ORDER_DELIVERED_DATE = ColumnRef(T_ORDERS, "fulfilled_at")
-COL_ORDER_ESTIMATED_DATE = ColumnRef(T_ORDERS, "estimated_delivery_at")
+COL_ORDER_ID = ColumnRef("orders", "id")
+COL_ORDER_STATUS = ColumnRef("orders", "financial_status")
+COL_ORDER_PURCHASE_TS = ColumnRef("orders", "processed_at")
+COL_ORDER_DELIVERED_DATE = ColumnRef("orders", "fulfilled_at")
+COL_ORDER_ESTIMATED_DATE = ColumnRef("orders", "estimated_delivery_at")
 
-COL_CUSTOMER_ID = ColumnRef(T_ORDERS, "customer_id")
-COL_CUSTOMER_CITY = ColumnRef(T_CUSTOMERS, "default_address_city")
-COL_CUSTOMER_STATE = ColumnRef(T_CUSTOMERS, "default_address_province_code")
-COL_CUSTOMER_UNIQUE_ID = ColumnRef(T_CUSTOMERS, "id")
+COL_CUSTOMER_ID = ColumnRef("orders", "customer_id")
+COL_CUSTOMER_CITY = ColumnRef("customers", "default_address_city")
+COL_CUSTOMER_STATE = ColumnRef("customers", "default_address_province_code")
+COL_CUSTOMER_UNIQUE_ID = ColumnRef("customers", "id")
 
-COL_PRODUCT_ID = ColumnRef(T_ORDER_ITEMS, "product_id")
-COL_PRICE = ColumnRef(T_ORDER_ITEMS, "price")
-COL_FREIGHT_VALUE = ColumnRef(T_ORDER_ITEMS, "shipping_lines_price")
+COL_PRODUCT_ID = ColumnRef("order_items", "product_id")
+COL_PRICE = ColumnRef("order_items", "price")
+COL_FREIGHT_VALUE = ColumnRef("order_items", "shipping_lines_price")
 
-COL_PRODUCT_CATEGORY_PT = ColumnRef(T_PRODUCTS, "product_type")
-COL_PRODUCT_CATEGORY_EN = ColumnRef(T_PRODUCT_CATEGORY_TRANSLATION, "title")
+COL_PRODUCT_CATEGORY_PT = ColumnRef("products", "product_type")
+COL_PRODUCT_CATEGORY_EN = ColumnRef("product_category_translation", "title")
 
-COL_PAYMENT_TYPE = ColumnRef(T_ORDERS, "gateway")
-COL_PAYMENT_VALUE = ColumnRef(T_ORDERS, "total_price")
+COL_PAYMENT_TYPE = ColumnRef("orders", "gateway")
+COL_PAYMENT_VALUE = ColumnRef("orders", "total_price")
 
-COL_REVIEW_SCORE = ColumnRef(T_ORDERS, "customer_satisfaction_score")
+COL_REVIEW_SCORE = ColumnRef("orders", "customer_satisfaction_score")
 
 
 # --- Enum values (US Shopify conventions) -----------------------------------

@@ -4,9 +4,8 @@ Returns the number of orders matching optional filters (city, state,
 status, date range). Parameter names are domain-neutral; the SQL
 emitter reads table/column names from the active SchemaConfig.
 
-This file is config-driven: the active `SchemaConfig` provides the
-physical table and column names. Switching schemas (e.g. SCHEMA=shopify)
-is what makes this query run against a different DB.
+Switching schemas (e.g. SCHEMA_NAME=shopify) is what makes this query
+run against a different DB.
 """
 import logging
 from typing import Optional
@@ -17,6 +16,7 @@ from validation.dates import parse_date_range
 from validation.enums import validate_order_status, ValidationError
 from config import settings
 from errors import client_error
+from functions._helpers import col_name, table_for
 from schemas.base import SchemaConfig
 
 logger = logging.getLogger(__name__)
@@ -48,10 +48,11 @@ def make_count_orders(cfg: SchemaConfig) -> dict:
 
     The `execute` returned here closes over `cfg`, so callers don't
     need to thread the config through. The SQL is emitted against the
-    config's tables/columns.
+    config's tables/columns via `col_name()` and `table_for()`.
     """
-    t_orders = cfg.get_table("orders")
-    t_customers = cfg.get_table("customers")
+    # Hold ColumnRef objects (not pre-extracted strings) so the SQL
+    # build site can never confuse a column for a table, or vice-versa.
+    cust_id = cfg.get_column("customer_id")
     col_city = cfg.get_column("customer_city")
     col_state = cfg.get_column("customer_state")
     col_status = cfg.get_column("order_status")
@@ -101,34 +102,34 @@ def make_count_orders(cfg: SchemaConfig) -> dict:
                 return {"error": f"Date validation failed: {str(e)}", "filters": filters}
 
         # Build the SQL against the active schema's table/column names.
-        # Note: we use simple string interpolation here for table/column
-        # identifiers (safe — these come from a frozen SchemaConfig, not
-        # user input). User values are parameterized via $1, $2, ...
-        cust_id_col = cfg.get_column("customer_id").column
+        # Table/column identifiers come from the (frozen) config — safe
+        # to interpolate. User values are parameterized via $1, $2, ...
+        t_orders = table_for(col_status, cfg)  # orders is the status column's table
+        t_customers = table_for(col_city, cfg)
         query = (
             f"SELECT COUNT(*) as count "
             f"FROM {t_orders} o "
-            f"LEFT JOIN {t_customers} c ON o.{cust_id_col} = c.{cust_id_col} "
+            f"LEFT JOIN {t_customers} c ON o.{col_name(cust_id)} = c.{col_name(cust_id)} "
             f"WHERE 1=1"
         )
 
         params = []
 
         if normalized_city:
-            query += f" AND c.{col_city.column} = ${len(params) + 1}"
+            query += f" AND c.{col_name(col_city)} = ${len(params) + 1}"
             params.append(normalized_city)
 
         if normalized_state:
-            query += f" AND c.{col_state.column} = ${len(params) + 1}"
+            query += f" AND c.{col_name(col_state)} = ${len(params) + 1}"
             params.append(normalized_state)
 
         if normalized_status:
-            query += f" AND o.{col_status.column} = ${len(params) + 1}"
+            query += f" AND o.{col_name(col_status)} = ${len(params) + 1}"
             params.append(normalized_status)
 
         if date_range:
-            query += f" AND o.{col_purchase.column} >= ${len(params) + 1}"
-            query += f" AND o.{col_purchase.column} <= ${len(params) + 2}"
+            query += f" AND o.{col_name(col_purchase)} >= ${len(params) + 1}"
+            query += f" AND o.{col_name(col_purchase)} <= ${len(params) + 2}"
             params.extend([date_range[0], date_range[1]])
 
         try:

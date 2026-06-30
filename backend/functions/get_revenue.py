@@ -14,6 +14,7 @@ from validation.dates import parse_date_range
 from validation.cities import resolve_city
 from config import settings
 from errors import client_error
+from functions._helpers import col_name, table_for
 from schemas.base import SchemaConfig
 
 logger = logging.getLogger(__name__)
@@ -58,25 +59,25 @@ SCHEMA = {
 
 
 def make_get_revenue(cfg: SchemaConfig) -> dict:
-    t_payments = cfg.get_table("order_payments")
-    t_items = cfg.get_table("order_items")
-    t_orders = cfg.get_table("orders")
-    t_customers = cfg.get_table("customers")
-    t_products = cfg.get_table("products")
-    t_cat_translation = cfg.get_table("product_category_translation")
-
+    cust_id = cfg.get_column("customer_id")
     col_pay_value = cfg.get_column("payment_value")
     col_item_price = cfg.get_column("price")
     col_item_freight = cfg.get_column("freight_value")
-    col_pay_type = cfg.get_column("payment_type")
-    col_order_id = cfg.get_column("order_id").column
-    col_product_id = cfg.get_column("product_id").column
-    cust_id_col = cfg.get_column("customer_id").column
-    col_purchase = cfg.get_column("order_purchase_timestamp").column
-    col_city = cfg.get_column("customer_city").column
-    col_state = cfg.get_column("customer_state").column
-    col_cat_pt = cfg.get_column("product_category_pt").column
-    col_cat_en = cfg.get_column("product_category_en").column
+    col_purchase = cfg.get_column("order_purchase_timestamp")
+    col_order_id = cfg.get_column("order_id")
+    col_city = cfg.get_column("customer_city")
+    col_state = cfg.get_column("customer_state")
+    col_cat_pt = cfg.get_column("product_category_pt")
+    col_cat_en = cfg.get_column("product_category_en")
+    col_product_id = cfg.get_column("product_id")
+
+    # Resolve table names once (they're used in JOINs).
+    t_payments = table_for(col_pay_value, cfg)
+    t_items = table_for(col_item_price, cfg)
+    t_orders = table_for(col_purchase, cfg)
+    t_customers = table_for(col_city, cfg)
+    t_products = table_for(col_cat_pt, cfg)
+    t_cat_translation = table_for(col_cat_en, cfg)
 
     async def execute(
         date_token: Optional[str] = None,
@@ -137,13 +138,13 @@ def make_get_revenue(cfg: SchemaConfig) -> dict:
         conditions = []
 
         if use_items:
-            measure = f"SUM(oi.{col_item_price.column} + oi.{col_item_freight.column})"
+            measure = f"SUM(oi.{col_name(col_item_price)} + oi.{col_name(col_item_freight)})"
             from_clause = (
                 f"FROM {t_items} oi "
-                f"JOIN {t_orders} o ON oi.{col_order_id} = o.{col_order_id} "
-                f"LEFT JOIN {t_customers} c ON o.{cust_id_col} = c.{cust_id_col} "
-                f"LEFT JOIN {t_products} p ON oi.{col_product_id} = p.{col_product_id} "
-                f"LEFT JOIN {t_cat_translation} t ON p.{col_cat_pt} = t.{col_cat_pt}"
+                f"JOIN {t_orders} o ON oi.{col_name(col_order_id)} = o.{col_name(col_order_id)} "
+                f"LEFT JOIN {t_customers} c ON o.{col_name(cust_id)} = c.{col_name(cust_id)} "
+                f"LEFT JOIN {t_products} p ON oi.{col_name(col_product_id)} = p.{col_name(col_product_id)} "
+                f"LEFT JOIN {t_cat_translation} t ON p.{col_name(col_cat_pt)} = t.{col_name(col_cat_pt)}"
             )
             if normalized_category:
                 params.append(normalized_category)
@@ -151,30 +152,30 @@ def make_get_revenue(cfg: SchemaConfig) -> dict:
                 params.append(normalized_category)
                 j = len(params)
                 conditions.append(
-                    f"(lower(t.{col_cat_en}) = ${i} "
-                    f"OR lower(p.{col_cat_pt}) = ${j})"
+                    f"(lower(t.{col_name(col_cat_en)}) = ${i} "
+                    f"OR lower(p.{col_name(col_cat_pt)}) = ${j})"
                 )
         else:
-            measure = f"SUM(p.{col_pay_value.column})"
+            measure = f"SUM(p.{col_name(col_pay_value)})"
             from_clause = (
                 f"FROM {t_payments} p "
-                f"JOIN {t_orders} o ON p.{col_order_id} = o.{col_order_id} "
-                f"LEFT JOIN {t_customers} c ON o.{cust_id_col} = c.{cust_id_col} "
+                f"JOIN {t_orders} o ON p.{col_name(col_order_id)} = o.{col_name(col_order_id)} "
+                f"LEFT JOIN {t_customers} c ON o.{col_name(cust_id)} = c.{col_name(cust_id)} "
             )
 
         if normalized_city:
             params.append(normalized_city)
-            conditions.append(f"c.{col_city} = ${len(params)}")
+            conditions.append(f"c.{col_name(col_city)} = ${len(params)}")
 
         if normalized_state:
             params.append(normalized_state)
-            conditions.append(f"c.{col_state} = ${len(params)}")
+            conditions.append(f"c.{col_name(col_state)} = ${len(params)}")
 
         if date_range:
             params.append(date_range[0])
-            conditions.append(f"o.{col_purchase} >= ${len(params)}")
+            conditions.append(f"o.{col_name(col_purchase)} >= ${len(params)}")
             params.append(date_range[1])
-            conditions.append(f"o.{col_purchase} <= ${len(params)}")
+            conditions.append(f"o.{col_name(col_purchase)} <= ${len(params)}")
 
         where_clause = " AND ".join(["1=1"] + conditions)
 
@@ -185,17 +186,17 @@ def make_get_revenue(cfg: SchemaConfig) -> dict:
                 return {"revenue": float(value or 0), "filters": filters}
 
             if group_by == "state":
-                group_expr = f"c.{col_state}"  # col_state is already the string
+                group_expr = f"c.{col_name(col_state)}"
                 label = "state"
                 order_clause = "revenue DESC NULLS LAST"
                 limit_clause = "LIMIT 15"
             elif group_by == "month":
-                group_expr = f"to_char(date_trunc('month', o.{col_purchase}), 'YYYY-MM')"
+                group_expr = f"to_char(date_trunc('month', o.{col_name(col_purchase)}), 'YYYY-MM')"
                 label = "month"
                 order_clause = "grp ASC"
                 limit_clause = ""
             else:  # category
-                group_expr = f"COALESCE(t.{col_cat_en}, p.{col_cat_pt})"
+                group_expr = f"COALESCE(t.{col_name(col_cat_en)}, p.{col_name(col_cat_pt)})"
                 label = "category"
                 order_clause = "revenue DESC NULLS LAST"
                 limit_clause = "LIMIT 15"

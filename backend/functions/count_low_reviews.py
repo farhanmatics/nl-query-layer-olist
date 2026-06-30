@@ -12,6 +12,7 @@ from validation.cities import resolve_city
 from validation.dates import parse_date_range
 from config import settings
 from errors import client_error
+from functions._helpers import col_name, table_for
 from schemas.base import SchemaConfig
 
 logger = logging.getLogger(__name__)
@@ -36,14 +37,11 @@ SCHEMA = {
 
 
 def make_count_low_reviews(cfg: SchemaConfig) -> dict:
-    t_reviews = cfg.get_table("order_reviews")
-    t_orders = cfg.get_table("orders")
-    t_customers = cfg.get_table("customers")
+    cust_id = cfg.get_column("customer_id")
+    col_order_id = cfg.get_column("order_id")
     col_score = cfg.get_column("review_score")
     col_review_date = cfg.get_column("review_creation_date")
     col_city = cfg.get_column("customer_city")
-    col_order_id = cfg.get_column("order_id").column
-    col_customer_id = cfg.get_column("customer_id").column
 
     async def execute(
         score_max: int = 2,
@@ -87,23 +85,28 @@ def make_count_low_reviews(cfg: SchemaConfig) -> dict:
         # The review row joins to the order by order_id; the order joins
         # to the customer by customer_id. The config wires both columns
         # so the SQL is identical across schemas.
+        # The review table is whichever table the `review_score` column
+        # lives in (order_reviews in Olist, orders in Shopify).
+        t_reviews = table_for(col_score, cfg)
+        t_orders = table_for(col_order_id, cfg)
+        t_customers = table_for(col_city, cfg)
         query = (
             f"SELECT COUNT(*) AS count "
             f"FROM {t_reviews} r "
-            f"JOIN {t_orders} o ON r.{col_order_id} = o.{col_order_id} "
-            f"LEFT JOIN {t_customers} c ON o.{col_customer_id} = c.{col_customer_id} "
-            f"WHERE r.{col_score.column} <= $1"
+            f"JOIN {t_orders} o ON r.{col_name(col_order_id)} = o.{col_name(col_order_id)} "
+            f"LEFT JOIN {t_customers} c ON o.{col_name(cust_id)} = c.{col_name(cust_id)} "
+            f"WHERE r.{col_name(col_score)} <= $1"
         )
 
         params = [score_max]
 
         if normalized_city:
-            query += f" AND c.{col_city.column} = ${len(params) + 1}"
+            query += f" AND c.{col_name(col_city)} = ${len(params) + 1}"
             params.append(normalized_city)
 
         if date_range:
-            query += f" AND r.{col_review_date.column} >= ${len(params) + 1}"
-            query += f" AND r.{col_review_date.column} <= ${len(params) + 2}"
+            query += f" AND r.{col_name(col_review_date)} >= ${len(params) + 1}"
+            query += f" AND r.{col_name(col_review_date)} <= ${len(params) + 2}"
             params.extend([date_range[0], date_range[1]])
 
         try:

@@ -24,32 +24,24 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import pytest  # noqa: E402
 
 import schemas  # noqa: E402
-from schemas import get_active_config, reload_active_config, set_active_config  # noqa: E402
-from schemas.base import ColumnRef, PromptConfig, SchemaConfig, ScopePattern  # noqa: E402
+from schemas import SchemaConfig  # noqa: E402
+from schemas.base import ColumnRef  # noqa: E402
 
 
 # --- Loading & switching ------------------------------------------------------
 
-def test_olist_is_the_default():
+def test_olist_is_the_default(monkeypatch):
     """If no SCHEMA_NAME is set, the default must be olist — every
     existing test, deployment, and config relies on this."""
-    set_active_config(None)  # clear any test override
-    # Make sure the env doesn't override us for this assertion.
-    import os
-    saved = os.environ.pop("SCHEMA_NAME", None)
-    try:
-        # settings.schema_name still defaults to "olist" so this stays
-        # the default even without an env var.
-        cfg = reload_active_config()
-        assert cfg.name == "olist"
-    finally:
-        if saved is not None:
-            os.environ["SCHEMA_NAME"] = saved
+    monkeypatch.delenv("SCHEMA_NAME", raising=False)
+    schemas.set_active_config(None)
+    cfg = schemas.reload_active_config()
+    assert cfg.name == "olist"
 
 
-def test_olist_loads_with_required_keys():
-    set_active_config(None)
-    cfg = reload_active_config()
+def test_olist_loads_with_required_keys(schema):
+    schema("olist")
+    cfg = schemas.get_active_config()
     assert isinstance(cfg, SchemaConfig)
     assert cfg.name == "olist"
     assert cfg.display_name  # non-empty
@@ -67,98 +59,91 @@ def test_olist_loads_with_required_keys():
     assert "SP" in cfg.states
     # Prompt has the few-shot examples
     assert len(cfg.prompt.few_shot_examples) > 0
-    # Source citations cover every function
-    functions = [n for n in schemas.list_available_schemas()]
-    # (we know the registry builds from the active schema's factories)
-    reg = schemas._BUILTIN  # noqa: SLF001 (test-only inspection)
 
 
-def test_shopify_loads_with_required_keys():
+def test_shopify_loads_with_required_keys(schema):
     """The Shopify stub must load and present the SAME logical shape
     (tables, columns, enums) as Olist — even though the physical table
     names are completely different."""
-    import os
-    saved = os.environ.get("SCHEMA_NAME")
-    os.environ["SCHEMA_NAME"] = "shopify"
-    set_active_config(None)
-    cfg = reload_active_config()
-    try:
-        assert cfg.name == "shopify"
-        # Same logical keys, different physical names
-        assert cfg.tables["orders"] == "shopify_orders"
-        assert cfg.tables["customers"] == "shopify_customers"
-        # Status enum reflects Shopify's order lifecycle, not Olist's
-        statuses = cfg.get_enum("status")
-        assert statuses is not None
-        assert "fulfilled" in statuses
-        assert "refunded" in statuses
-        assert "delivered" not in statuses  # Olist-only term
-        # States: US, not Brazil
-        assert "CA" in cfg.states
-        assert "NY" in cfg.states
-        assert "SP" not in cfg.states  # Olist-only
-    finally:
-        if saved is None:
-            os.environ.pop("SCHEMA_NAME", None)
-        else:
-            os.environ["SCHEMA_NAME"] = saved
-        set_active_config(None)
-        reload_active_config()
+    schema("shopify")
+    cfg = schemas.get_active_config()
+    assert cfg.name == "shopify"
+    # Same logical keys, different physical names
+    assert cfg.tables["orders"] == "shopify_orders"
+    assert cfg.tables["customers"] == "shopify_customers"
+    # Status enum reflects Shopify's order lifecycle, not Olist's
+    statuses = cfg.get_enum("status")
+    assert statuses is not None
+    assert "fulfilled" in statuses
+    assert "refunded" in statuses
+    assert "delivered" not in statuses  # Olist-only term
+    # States: US, not Brazil
+    assert "CA" in cfg.states
+    assert "NY" in cfg.states
+    assert "SP" not in cfg.states  # Olist-only
 
 
-def test_unknown_schema_name_errors():
-    set_active_config(None)
-    import os
-    saved = os.environ.get("SCHEMA_NAME")
-    os.environ["SCHEMA_NAME"] = "nonexistent"
-    try:
-        with pytest.raises(RuntimeError, match="Unknown schema"):
-            reload_active_config()
-    finally:
-        if saved is None:
-            os.environ.pop("SCHEMA_NAME", None)
-        else:
-            os.environ["SCHEMA_NAME"] = saved
-        set_active_config(None)
-        reload_active_config()
+def test_unknown_schema_name_errors(monkeypatch):
+    monkeypatch.setenv("SCHEMA_NAME", "nonexistent")
+    schemas.set_active_config(None)
+    with pytest.raises(RuntimeError, match="Unknown schema"):
+        schemas.reload_active_config()
 
 
 # --- Config shape -----------------------------------------------------------
 
-def test_get_table_and_get_column_are_strict():
+def test_get_table_and_get_column_are_strict(schema):
     """Unknown logical keys must raise KeyError (loud failure beats a
     silent query against the wrong table)."""
-    set_active_config(None)
-    cfg = reload_active_config()
+    schema("olist")
+    cfg = schemas.get_active_config()
     with pytest.raises(KeyError, match="nonexistent_table"):
         cfg.get_table("nonexistent_table")
     with pytest.raises(KeyError, match="nonexistent_column"):
         cfg.get_column("nonexistent_column")
 
 
-def test_get_enum_unknown_raises():
-    set_active_config(None)
-    cfg = reload_active_config()
+def test_get_enum_unknown_raises(schema):
+    schema("olist")
+    cfg = schemas.get_active_config()
     with pytest.raises(KeyError, match="nonexistent_enum"):
         cfg.get_enum("nonexistent_enum")
 
 
-def test_columns_are_typed_as_columnref():
+def test_columns_are_typed_as_columnref(schema):
     """Every column entry must be a ColumnRef(table, column), not a
     bare string. The function SQL emitter relies on this for safe
     table-prefixed joins."""
-    set_active_config(None)
-    cfg = reload_active_config()
+    schema("olist")
+    cfg = schemas.get_active_config()
     for name, col in cfg.columns.items():
         assert isinstance(col, ColumnRef), f"column {name!r} is not a ColumnRef"
         assert col.table, f"column {name!r} has empty table"
         assert col.column, f"column {name!r} has empty column name"
 
 
-def test_prompt_has_required_strings():
+def test_column_table_is_logical_key(schema):
+    """ColumnRef.table stores the LOGICAL table name (a key into
+    SchemaConfig.tables), not the physical name. This is the indirection
+    that lets a new schema change physical names without touching
+    function code — the function factory resolves logical → physical
+    via the tables dict.
+    """
+    schema("olist")
+    cfg = schemas.get_active_config()
+    # customer_city is in the customers table, both logically and physically
+    col = cfg.get_column("customer_city")
+    assert col.table == "customers", (
+        f"ColumnRef.table should be 'customers' (logical), got {col.table!r}"
+    )
+    # And cfg.tables maps that logical name to the physical name
+    assert cfg.tables[col.table] == "olist_customers_dataset"
+
+
+def test_prompt_has_required_strings(schema):
     """If any of these are empty, the LLM will get bad instructions."""
-    set_active_config(None)
-    cfg = reload_active_config()
+    schema("olist")
+    cfg = schemas.get_active_config()
     prompt = cfg.prompt
     for attr in (
         "dataset_description", "city_rule", "state_rule",
@@ -167,12 +152,12 @@ def test_prompt_has_required_strings():
         assert getattr(prompt, attr), f"prompt.{attr} is empty"
 
 
-def test_source_citations_cover_every_function():
+def test_source_citations_cover_every_function(schema):
     """Every registered function should have a human-readable source
     citation. Empty citations mean the user can't verify the query
     came from where we said."""
-    set_active_config(None)
-    cfg = reload_active_config()
+    schema("olist")
+    cfg = schemas.get_active_config()
     # Force-build the registry via the active config
     reg = {f["schema"]["name"]: f for f in
            [factory(cfg) for factory in cfg.function_factories]}
@@ -184,52 +169,36 @@ def test_source_citations_cover_every_function():
 
 # --- Out-of-scope differs per schema ----------------------------------------
 
-def test_olist_declines_returns():
+def test_olist_declines_returns(schema):
     """Per the Olist out-of-scope lexicon — Olist doesn't have a returns
     table, so we decline with a redirect to canceled orders."""
-    set_active_config(None)
-    cfg = reload_active_config()
-    if cfg.name != "olist":
-        pytest.skip("not on olist")
+    schema("olist")
     from validation.scope import detect_unsupported_concept
     result = detect_unsupported_concept("how many returns did we have?")
     assert result is not None
     assert result["concept"] == "returns"
 
 
-def test_shopify_does_not_decline_returns():
+def test_shopify_does_not_decline_returns(schema):
     """Shopify tracks returns as a first-class concept, so its scope
     patterns must NOT include the word 'returns' — declining would be
     a wrong answer."""
-    import os
-    saved = os.environ.get("SCHEMA_NAME")
-    os.environ["SCHEMA_NAME"] = "shopify"
-    set_active_config(None)
-    cfg = reload_active_config()
-    assert cfg.name == "shopify"
-    try:
-        from validation.scope import detect_unsupported_concept
-        result = detect_unsupported_concept("how many returns did we have?")
-        assert result is None, (
-            f"Shopify should not decline 'returns' but it did: {result}"
-        )
-    finally:
-        if saved is None:
-            os.environ.pop("SCHEMA_NAME", None)
-        else:
-            os.environ["SCHEMA_NAME"] = saved
-        set_active_config(None)
-        reload_active_config()
+    schema("shopify")
+    from validation.scope import detect_unsupported_concept
+    result = detect_unsupported_concept("how many returns did we have?")
+    assert result is None, (
+        f"Shopify should not decline 'returns' but it did: {result}"
+    )
 
 
 # --- Function registry builds from the active config -----------------------
 
-def test_registry_builds_from_active_config():
+def test_registry_builds_from_active_config(schema):
     """The registry is materialised on demand from the active config's
     factories. Switching the config (via set_active_config + reset)
     rebuilds it."""
-    set_active_config(None)
-    cfg = reload_active_config()
+    schema("olist")
+    cfg = schemas.get_active_config()
     import functions.registry as registry
     registry.reset_registry()
     schemas_list = registry.get_all_schemas()
@@ -240,101 +209,90 @@ def test_registry_builds_from_active_config():
         assert name in [s["name"] for s in schemas_list]
 
 
-def test_shopify_functions_are_wired_stubs():
+def test_shopify_functions_are_wired_stubs(schema):
     """Shopify's factory returns a registry entry whose execute reports
     'not wired' — so the schema is selectable for prompt/formatting
     tests but cannot actually answer questions yet."""
-    import os
-    saved = os.environ.get("SCHEMA_NAME")
-    os.environ["SCHEMA_NAME"] = "shopify"
-    set_active_config(None)
-    cfg = reload_active_config()
+    schema("shopify")
+    cfg = schemas.get_active_config()
     import functions.registry as registry
-    try:
-        registry.reset_registry()
+    registry.reset_registry()
 
-        # Build all shopify function entries
-        for factory in cfg.function_factories:
-            entry = factory(cfg)
-            # All entries have schema + execute
-            assert "schema" in entry
-            assert "execute" in entry
-            # All entries have the same JSON-schema shape (parameter names
-            # are domain-neutral, not schema-specific)
-            params = entry["schema"].get("parameters", {}).get("properties", {})
-            # The key invariant: cities, states, statuses, dates are
-            # domain-neutral keys the LLM uses. They must NOT vary between
-            # schemas. (This is what lets the same prompt work for both.)
-            if "status" in params:
-                assert "description" in params["status"]
-            if "city" in params:
-                assert "description" in params["city"]
-            if "state" in params:
-                assert "description" in params["state"]
-    finally:
-        if saved is None:
-            os.environ.pop("SCHEMA_NAME", None)
-        else:
-            os.environ["SCHEMA_NAME"] = saved
-        set_active_config(None)
-        reload_active_config()
+    # Build all shopify function entries
+    for factory in cfg.function_factories:
+        entry = factory(cfg)
+        # All entries have schema + execute
+        assert "schema" in entry
+        assert "execute" in entry
+        # All entries have the same JSON-schema shape (parameter names
+        # are domain-neutral, not schema-specific)
+        params = entry["schema"].get("parameters", {}).get("properties", {})
+        # The key invariant: cities, states, statuses, dates are
+        # domain-neutral keys the LLM uses. They must NOT vary between
+        # schemas. (This is what lets the same prompt work for both.)
+        if "status" in params:
+            assert "description" in params["status"]
+        if "city" in params:
+            assert "description" in params["city"]
+        if "state" in params:
+            assert "description" in params["state"]
 
 
-def test_shopify_count_orders_returns_not_wired_error():
+def test_shopify_count_orders_returns_not_wired_error(schema):
     """The Shopify stub's factory (defined in the schema config, not in
     functions/count_orders.py) returns a registry entry whose execute
     immediately reports 'not wired' — without hitting any DB."""
-    import os
-    saved = os.environ.get("SCHEMA_NAME")
-    os.environ["SCHEMA_NAME"] = "shopify"
-    set_active_config(None)
-    cfg = reload_active_config()
+    schema("shopify")
+    cfg = schemas.get_active_config()
     import asyncio
-    try:
-        # Use the schema's own factory (the one in the config), NOT the
-        # Olist functions/count_orders.py module. The Olist factory would
-        # try to run SQL against shopify_* tables and fail at the DB.
-        factories_by_name = {f(cfg)["schema"]["name"]: f for f in cfg.function_factories}
-        entry = factories_by_name["count_orders"](cfg)
-        result = asyncio.run(entry["execute"]())
-        assert "error" in result
-        assert "not wired" in result["error"].lower() or "stub" in result["error"].lower()
-    finally:
-        if saved is None:
-            os.environ.pop("SCHEMA_NAME", None)
-        else:
-            os.environ["SCHEMA_NAME"] = saved
-        set_active_config(None)
-        reload_active_config()
+    # Use the schema's own factory (the one in the config), NOT the
+    # Olist functions/count_orders.py module. The Olist factory would
+    # try to run SQL against shopify_* tables and fail at the DB.
+    factories_by_name = {f(cfg)["schema"]["name"]: f for f in cfg.function_factories}
+    entry = factories_by_name["count_orders"](cfg)
+    result = asyncio.run(entry["execute"]())
+    assert "error" in result
+    assert "not wired" in result["error"].lower() or "stub" in result["error"].lower()
 
 
 # --- Prompt reflects the active schema --------------------------------------
 
-def test_prompt_few_shot_examples_match_active_schema():
+def test_prompt_few_shot_examples_match_active_schema(schema):
     """Few-shots in the prompt must reference the active schema's
     domain. Showing 'São Paulo' on Shopify would mislead the model."""
-    set_active_config(None)
-    cfg = reload_active_config()
+    schema("olist")
+    cfg = schemas.get_active_config()
     all_examples = " ".join(q for q, _ in cfg.prompt.few_shot_examples)
     if cfg.name == "olist":
         # Brazilian cities
         assert "São Paulo" in all_examples or "sao paulo" in all_examples
         # Brazilian UF
         assert " SP" in all_examples or "=SP" in all_examples or '"SP"' in all_examples
-    elif cfg.name == "shopify":
-        # US cities
-        assert "New York" in all_examples or "San Francisco" in all_examples
-        # US state
-        assert " CA" in all_examples or "=CA" in all_examples or '"CA"' in all_examples
 
 
-# --- Cleanup: restore default after this module -----------------------
+def test_shopify_prompt_few_shot_examples_match_active_schema(schema):
+    """The Shopify prompt must show US cities and US states, not
+    Brazilian ones."""
+    schema("shopify")
+    cfg = schemas.get_active_config()
+    all_examples = " ".join(q for q, _ in cfg.prompt.few_shot_examples)
+    assert "New York" in all_examples or "San Francisco" in all_examples
+    assert " CA" in all_examples or "=CA" in all_examples or '"CA"' in all_examples
 
-@pytest.fixture(autouse=True)
-def _restore_default():
-    yield
-    set_active_config(None)
-    import os
-    if "SCHEMA_NAME" in os.environ:
-        del os.environ["SCHEMA_NAME"]
-    reload_active_config()
+
+def test_build_system_prompt_lists_all_registered_tools(schema):
+    """Every registered function must appear in the TOOLS block the LLM
+    sees — missing tools mean the model can't route to them."""
+    schema("olist")
+    import functions.registry as registry
+    from orchestrator import build_system_prompt
+
+    registry.reset_registry()
+    tool_schemas = registry.get_all_schemas()
+    prompt = build_system_prompt(tool_schemas)
+    cfg = schemas.get_active_config()
+
+    assert cfg.display_name in prompt
+    for factory in cfg.function_factories:
+        name = factory(cfg)["schema"]["name"]
+        assert name in prompt, f"tool {name!r} missing from system prompt"

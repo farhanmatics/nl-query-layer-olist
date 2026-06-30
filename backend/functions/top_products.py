@@ -11,6 +11,7 @@ from db import execute_query
 from validation.dates import parse_date_range
 from config import settings
 from errors import client_error
+from functions._helpers import col_name, table_for
 from schemas.base import SchemaConfig
 
 logger = logging.getLogger(__name__)
@@ -35,18 +36,18 @@ SCHEMA = {
 
 
 def make_top_products(cfg: SchemaConfig) -> dict:
-    t_items = cfg.get_table("order_items")
-    t_orders = cfg.get_table("orders")
-    t_products = cfg.get_table("products")
-    t_cat_translation = cfg.get_table("product_category_translation")
-
+    col_product_id = cfg.get_column("product_id")
+    col_order_id = cfg.get_column("order_id")
     col_item_price = cfg.get_column("price")
     col_item_freight = cfg.get_column("freight_value")
-    col_order_id = cfg.get_column("order_id").column
-    col_product_id = cfg.get_column("product_id").column
-    col_purchase = cfg.get_column("order_purchase_timestamp").column
-    col_cat_pt = cfg.get_column("product_category_pt").column
-    col_cat_en = cfg.get_column("product_category_en").column
+    col_purchase = cfg.get_column("order_purchase_timestamp")
+    col_cat_pt = cfg.get_column("product_category_pt")
+    col_cat_en = cfg.get_column("product_category_en")
+
+    t_items = table_for(col_item_price, cfg)
+    t_orders = table_for(col_purchase, cfg)
+    t_products = table_for(col_cat_pt, cfg)
+    t_cat_translation = table_for(col_cat_en, cfg)
 
     async def execute(
         date_token: Optional[str] = None,
@@ -74,30 +75,32 @@ def make_top_products(cfg: SchemaConfig) -> dict:
                 return {"error": f"Date validation failed: {str(e)}", "filters": filters}
 
         if by == "revenue":
-            measure_sql = f"SUM(oi.{col_item_price.column} + oi.{col_item_freight.column})"
+            measure_sql = f"SUM(oi.{col_name(col_item_price)} + oi.{col_name(col_item_freight)})"
         else:
             measure_sql = "COUNT(*)"
 
+        # Items join to orders by order_id; items join to products by
+        # product_id. Two different columns, two different joins.
         query = (
-            f"SELECT oi.{col_product_id}, "
-            f"COALESCE(t.{col_cat_en}, p.{col_cat_pt}) AS category, "
+            f"SELECT oi.{col_name(col_product_id)}, "
+            f"COALESCE(t.{col_name(col_cat_en)}, p.{col_name(col_cat_pt)}) AS category, "
             f"{measure_sql} AS value "
             f"FROM {t_items} oi "
-            f"JOIN {t_orders} o ON oi.{col_order_id} = o.{col_order_id} "
-            f"LEFT JOIN {t_products} p ON oi.{col_product_id} = p.{col_product_id} "
-            f"LEFT JOIN {t_cat_translation} t ON p.{col_cat_pt} = t.{col_cat_pt} "
+            f"JOIN {t_orders} o ON oi.{col_name(col_order_id)} = o.{col_name(col_order_id)} "
+            f"LEFT JOIN {t_products} p ON oi.{col_name(col_product_id)} = p.{col_name(col_product_id)} "
+            f"LEFT JOIN {t_cat_translation} t ON p.{col_name(col_cat_pt)} = t.{col_name(col_cat_pt)} "
             f"WHERE 1=1"
         )
 
         params = []
 
         if date_range:
-            query += f" AND o.{col_purchase} >= ${len(params) + 1}"
-            query += f" AND o.{col_purchase} <= ${len(params) + 2}"
+            query += f" AND o.{col_name(col_purchase)} >= ${len(params) + 1}"
+            query += f" AND o.{col_name(col_purchase)} <= ${len(params) + 2}"
             params.extend([date_range[0], date_range[1]])
 
         query += (
-            f" GROUP BY oi.{col_product_id}, COALESCE(t.{col_cat_en}, p.{col_cat_pt})"
+            f" GROUP BY oi.{col_name(col_product_id)}, COALESCE(t.{col_name(col_cat_en)}, p.{col_name(col_cat_pt)})"
             f" ORDER BY value DESC"
             f" LIMIT ${len(params) + 1}"
         )
@@ -107,7 +110,7 @@ def make_top_products(cfg: SchemaConfig) -> dict:
             rows = await execute_query(query, *params)
             products = [
                 {
-                    "product_id": r[col_product_id],
+                    "product_id": r[col_name(col_product_id)],
                     "category": r["category"],
                     "value": (int(r["value"]) if by == "count" else float(r["value"] or 0)),
                 }

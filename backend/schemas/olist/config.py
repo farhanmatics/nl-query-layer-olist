@@ -31,32 +31,37 @@ T_ORDER_REVIEWS = "olist_order_reviews_dataset"
 
 
 # --- Column references -------------------------------------------------------
+#
+# Each ColumnRef stores the LOGICAL table name (a key into `tables` below).
+# The factory's `table_for()` helper resolves it to the physical name at
+# SQL-emit time. This indirection is the whole point: a future schema
+# can change the physical table name without touching any function code.
 
-COL_ORDER_ID = ColumnRef(T_ORDERS, "order_id")
-COL_ORDER_STATUS = ColumnRef(T_ORDERS, "order_status")
-COL_ORDER_PURCHASE_TS = ColumnRef(T_ORDERS, "order_purchase_timestamp")
-COL_ORDER_DELIVERED_DATE = ColumnRef(T_ORDERS, "order_delivered_customer_date")
-COL_ORDER_ESTIMATED_DATE = ColumnRef(T_ORDERS, "order_estimated_delivery_date")
+COL_ORDER_ID = ColumnRef("orders", "order_id")
+COL_ORDER_STATUS = ColumnRef("orders", "order_status")
+COL_ORDER_PURCHASE_TS = ColumnRef("orders", "order_purchase_timestamp")
+COL_ORDER_DELIVERED_DATE = ColumnRef("orders", "order_delivered_customer_date")
+COL_ORDER_ESTIMATED_DATE = ColumnRef("orders", "order_estimated_delivery_date")
 
-COL_CUSTOMER_ID = ColumnRef(T_ORDERS, "customer_id")
-COL_CUSTOMER_CITY = ColumnRef(T_CUSTOMERS, "customer_city")
-COL_CUSTOMER_STATE = ColumnRef(T_CUSTOMERS, "customer_state")
-COL_CUSTOMER_UNIQUE_ID = ColumnRef(T_CUSTOMERS, "customer_unique_id")
+COL_CUSTOMER_ID = ColumnRef("orders", "customer_id")
+COL_CUSTOMER_CITY = ColumnRef("customers", "customer_city")
+COL_CUSTOMER_STATE = ColumnRef("customers", "customer_state")
+COL_CUSTOMER_UNIQUE_ID = ColumnRef("customers", "customer_unique_id")
 
-COL_PRODUCT_ID = ColumnRef(T_ORDER_ITEMS, "product_id")
-COL_SELLER_ID = ColumnRef(T_ORDER_ITEMS, "seller_id")
-COL_PRICE = ColumnRef(T_ORDER_ITEMS, "price")
-COL_FREIGHT_VALUE = ColumnRef(T_ORDER_ITEMS, "freight_value")
+COL_PRODUCT_ID = ColumnRef("order_items", "product_id")
+COL_SELLER_ID = ColumnRef("order_items", "seller_id")
+COL_PRICE = ColumnRef("order_items", "price")
+COL_FREIGHT_VALUE = ColumnRef("order_items", "freight_value")
 
-COL_PRODUCT_CATEGORY_PT = ColumnRef(T_PRODUCTS, "product_category_name")
-COL_PRODUCT_CATEGORY_EN = ColumnRef(T_PRODUCT_CATEGORY_TRANSLATION, "product_category_name_english")
+COL_PRODUCT_CATEGORY_PT = ColumnRef("products", "product_category_name")
+COL_PRODUCT_CATEGORY_EN = ColumnRef("product_category_translation", "product_category_name_english")
 
-COL_PAYMENT_TYPE = ColumnRef(T_ORDER_PAYMENTS, "payment_type")
-COL_PAYMENT_VALUE = ColumnRef(T_ORDER_PAYMENTS, "payment_value")
+COL_PAYMENT_TYPE = ColumnRef("order_payments", "payment_type")
+COL_PAYMENT_VALUE = ColumnRef("order_payments", "payment_value")
 
-COL_REVIEW_ID = ColumnRef(T_ORDER_REVIEWS, "review_id")
-COL_REVIEW_SCORE = ColumnRef(T_ORDER_REVIEWS, "review_score")
-COL_REVIEW_CREATION_DATE = ColumnRef(T_ORDER_REVIEWS, "review_creation_date")
+COL_REVIEW_ID = ColumnRef("order_reviews", "review_id")
+COL_REVIEW_SCORE = ColumnRef("order_reviews", "review_score")
+COL_REVIEW_CREATION_DATE = ColumnRef("order_reviews", "review_creation_date")
 
 
 # --- Enum values (logical name -> allowed values) ----------------------------

@@ -11,6 +11,7 @@ from validation.dates import parse_date_range
 from validation.enums import validate_order_status, ValidationError
 from config import settings
 from errors import client_error
+from functions._helpers import col_name, table_for
 from schemas.base import SchemaConfig
 
 logger = logging.getLogger(__name__)
@@ -38,14 +39,15 @@ SCHEMA = {
 
 
 def make_list_orders(cfg: SchemaConfig) -> dict:
-    t_orders = cfg.get_table("orders")
-    t_customers = cfg.get_table("customers")
-    col_order_id = cfg.get_column("order_id").column
-    col_status = cfg.get_column("order_status").column
-    col_purchase = cfg.get_column("order_purchase_timestamp").column
-    col_city = cfg.get_column("customer_city").column
-    col_state = cfg.get_column("customer_state").column
-    cust_id_col = cfg.get_column("customer_id").column
+    cust_id = cfg.get_column("customer_id")
+    col_order_id = cfg.get_column("order_id")
+    col_status = cfg.get_column("order_status")
+    col_purchase = cfg.get_column("order_purchase_timestamp")
+    col_city = cfg.get_column("customer_city")
+    col_state = cfg.get_column("customer_state")
+
+    t_orders = table_for(col_order_id, cfg)
+    t_customers = table_for(col_city, cfg)
 
     async def execute(
         city: Optional[str] = None,
@@ -110,35 +112,35 @@ def make_list_orders(cfg: SchemaConfig) -> dict:
         params = []
 
         if normalized_city:
-            where += f" AND c.{col_city} = ${len(params) + 1}"
+            where += f" AND c.{col_name(col_city)} = ${len(params) + 1}"
             params.append(normalized_city)
 
         if normalized_state:
-            where += f" AND c.{col_state} = ${len(params) + 1}"
+            where += f" AND c.{col_name(col_state)} = ${len(params) + 1}"
             params.append(normalized_state)
 
         if normalized_status:
-            where += f" AND o.{col_status} = ${len(params) + 1}"
+            where += f" AND o.{col_name(col_status)} = ${len(params) + 1}"
             params.append(normalized_status)
 
         if date_range:
-            where += f" AND o.{col_purchase} >= ${len(params) + 1}"
-            where += f" AND o.{col_purchase} <= ${len(params) + 2}"
+            where += f" AND o.{col_name(col_purchase)} >= ${len(params) + 1}"
+            where += f" AND o.{col_name(col_purchase)} <= ${len(params) + 2}"
             params.extend([date_range[0], date_range[1]])
 
         count_query = (
             f"SELECT COUNT(*) "
             f"FROM {t_orders} o "
-            f"LEFT JOIN {t_customers} c ON o.{cust_id_col} = c.{cust_id_col}"
+            f"LEFT JOIN {t_customers} c ON o.{col_name(cust_id)} = c.{col_name(cust_id)}"
             f"{where}"
         )
 
         rows_query = (
-            f"SELECT o.{col_order_id}, o.{col_status}, o.{col_purchase}, c.{col_city}, c.{col_state} "
+            f"SELECT o.{col_name(col_order_id)}, o.{col_name(col_status)}, o.{col_name(col_purchase)}, c.{col_name(col_city)}, c.{col_name(col_state)} "
             f"FROM {t_orders} o "
-            f"LEFT JOIN {t_customers} c ON o.{cust_id_col} = c.{cust_id_col}"
+            f"LEFT JOIN {t_customers} c ON o.{col_name(cust_id)} = c.{col_name(cust_id)}"
             f"{where} "
-            f"ORDER BY o.{col_purchase} DESC NULLS LAST "
+            f"ORDER BY o.{col_name(col_purchase)} DESC NULLS LAST "
             f"LIMIT ${len(params) + 1} "
             f"OFFSET ${len(params) + 2}"
         )
@@ -153,13 +155,13 @@ def make_list_orders(cfg: SchemaConfig) -> dict:
             for r in rows:
                 orders.append(
                     {
-                        "order_id": r[col_order_id],
-                        "order_status": r[col_status],
-                        "order_purchase_timestamp": r[col_purchase].isoformat()
-                        if r[col_purchase]
+                        "order_id": r[col_name(col_order_id)],
+                        "order_status": r[col_name(col_status)],
+                        "order_purchase_timestamp": r[col_name(col_purchase)].isoformat()
+                        if r[col_name(col_purchase)]
                         else None,
-                        "customer_city": r[col_city],
-                        "customer_state": r[col_state],
+                        "customer_city": r[col_name(col_city)],
+                        "customer_state": r[col_name(col_state)],
                     }
                 )
 
