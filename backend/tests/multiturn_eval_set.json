@@ -1,0 +1,91 @@
+{
+  "description": "Multi-turn conversational eval (B4). Each conversation is replayed against ONE durable server session (authenticated). A turn asserts the resolved operation and that expected_filters are a subset of the actual filters. Conversational invariants: 'expect_inherited' requires context.inherited; 'expect_carried' lists slots that must appear in context.carried; 'expect_clarify' requires the resolver to decline with a clarify prompt; 'forbid_count' lists result.count values that must NEVER appear (the confidently-wrong all-time numbers the feature exists to prevent). forbid_count and expect_clarify are HARD failures regardless of pass-rate threshold. A filter value of '*' means the key must be present and non-empty.",
+  "conversations": [
+    {
+      "id": "c01_lowreviews_rio_carry_date",
+      "note": "The headline regression: follow-up must inherit count_low_reviews + last_month, NOT become an all-time count_orders (the 6882 failure).",
+      "turns": [
+        {
+          "question": "How many low reviews did we get last month?",
+          "expected_operation": "count_low_reviews",
+          "expected_filters": {"date_range": "*"}
+        },
+        {
+          "question": "and how many for Rio de Janeiro?",
+          "expected_operation": "count_low_reviews",
+          "expected_filters": {"city": "rio de janeiro", "date_range": "*"},
+          "expect_inherited": true,
+          "expect_carried": ["date_token"],
+          "forbid_count": [6882]
+        }
+      ]
+    },
+    {
+      "id": "c02_count_orders_city_overlay",
+      "note": "Follow-up swaps the city but must keep the inherited status + date.",
+      "turns": [
+        {
+          "question": "How many delivered orders did we have in Sao Paulo last month?",
+          "expected_operation": "count_orders",
+          "expected_filters": {"city": "sao paulo", "status": "delivered", "date_range": "*"}
+        },
+        {
+          "question": "and in Rio de Janeiro?",
+          "expected_operation": "count_orders",
+          "expected_filters": {"city": "rio de janeiro", "status": "delivered", "date_range": "*"},
+          "expect_inherited": true,
+          "expect_carried": ["status", "date_token"]
+        }
+      ]
+    },
+    {
+      "id": "c03_revenue_state_overlay",
+      "note": "Revenue follow-up overlays a state while inheriting the date window.",
+      "turns": [
+        {
+          "question": "What was our total revenue last month?",
+          "expected_operation": "get_revenue",
+          "expected_filters": {"date_range": "*"}
+        },
+        {
+          "question": "what about for SP?",
+          "expected_operation": "get_revenue",
+          "expected_filters": {"state": "SP", "date_range": "*"},
+          "expect_inherited": true,
+          "expect_carried": ["date_token"]
+        }
+      ]
+    },
+    {
+      "id": "c04_fresh_resets_context",
+      "note": "A fully-specified new question must NOT inherit the prior turn.",
+      "turns": [
+        {
+          "question": "What was our total revenue last month?",
+          "expected_operation": "get_revenue",
+          "expected_filters": {"date_range": "*"}
+        },
+        {
+          "question": "How many delivered orders did we have this year?",
+          "expected_operation": "count_orders",
+          "expected_filters": {"status": "delivered", "date_range": "*"},
+          "expect_inherited": false
+        }
+      ]
+    },
+    {
+      "id": "c05_clarify_on_unsupported_filter",
+      "note": "top_products can't filter by city; a 'for <city>' follow-up must clarify, never silently return the national top-N.",
+      "turns": [
+        {
+          "question": "What are our best selling products?",
+          "expected_operation": "top_products"
+        },
+        {
+          "question": "for Rio de Janeiro?",
+          "expect_clarify": true
+        }
+      ]
+    }
+  ]
+}

@@ -167,11 +167,14 @@ Citations/verification surface; result capping & pagination; statement
 timeouts; request logging; an **eval set** of ~50–100 real questions with
 expected results, run on every change to catch faithfulness regressions.
 
-**Phase 3 — Productization (build-once-sell-many).**
-Extract schema + functions + validation into per-schema **config** so a new
-customer DB is onboarded by description, not by rewriting the app. This is the
-lever that turns this from a gig into a product. Define what "supporting a new
-schema" concretely requires.
+**Phase 3 — Productization (build-once-sell-many).** ✅ *DONE — see
+`backend/schemas/`. Per-schema config; `SCHEMA_NAME` env var selects
+the active config at startup; Olist is the default, Shopify is a
+configuration-only stub that proves the abstraction generalizes.
+Adding a new schema = one config module + one entry in
+`schemas/__init__.py::_BUILTIN`. The function library, validation
+layer, and orchestrator's system prompt all read from the active
+config — no other code changes needed.*
 
 **Phase 4 — Long tail (only if needed).**
 Fenced generated-SQL escape hatch (read-only role, mandatory LIMIT, timeouts,
@@ -181,6 +184,8 @@ orchestration; optional delivery channels (Slack, scheduled digests).
 ## Open questions to resolve as we build
 - Reference-date strategy for relative dates in the historical dataset.
 - Exact JSON response contract between backend and frontend.
-- How much per-schema config Phase 3 actually needs (the scalability number).
+- ~~How much per-schema config Phase 3 actually needs.~~ *Resolved
+  by the SchemaConfig shape: tables + columns + enums + states + scope
+  + prompt. The `tests/test_schemas.py` suite pins the contract.*
 - Target production deployment: on-prem (Mac Mini) vs serverless — gated by the
   customer's data-residency requirements.

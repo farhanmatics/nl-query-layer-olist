@@ -39,10 +39,10 @@ export function ResultCard({ response }: { response: QueryResponse }) {
   else if (op === 'get_revenue') body = <RevenueView result={result} />
   else if (op === 'top_products') body = <TopProducts result={result} />
   else if (op === 'list_orders') body = <OrdersTable result={result} />
-  else body = <pre className="overflow-x-auto rounded-lg bg-slate-50 p-3 text-xs text-slate-600">{JSON.stringify(result, null, 2)}</pre>
+  else body = <pre className="overflow-x-auto rounded-lg bg-inset p-3 text-xs text-muted">{JSON.stringify(result, null, 2)}</pre>
 
   return (
-    <div className="mt-2.5 max-w-xl overflow-hidden rounded-xl border border-slate-200 bg-white shadow-soft">
+    <div className="mt-2.5 max-w-xl overflow-hidden rounded-xl border border-line bg-surface shadow-soft">
       <div className="p-4">{body}</div>
       <CardFooter filters={filters} source={response.source} guard={response.guard} cached={response.cached} />
     </div>
@@ -52,11 +52,13 @@ export function ResultCard({ response }: { response: QueryResponse }) {
 /* ---------- per-operation views ---------- */
 
 function StatCard({ value, unit, tone = 'brand' }: { value: string; unit: string; tone?: 'brand' | 'rose' }) {
-  const color = tone === 'rose' ? 'text-rose-600' : 'text-brand-600'
+  const color =
+    tone === 'rose' ? 'text-rose-600 dark:text-rose-400' : 'text-brand-600 dark:text-brand-400'
   return (
     <div className="py-2 text-center">
-      <div className={`text-5xl font-bold tracking-tight ${color}`}>{value}</div>
-      <div className="mt-1 text-sm font-medium text-slate-500">{unit}</div>
+      {/* tabular-nums: digits align on a fixed grid so big counts read precise */}
+      <div className={`text-5xl font-bold tracking-tight tabular-nums ${color}`}>{value}</div>
+      <div className="mt-1 text-sm font-medium text-muted">{unit}</div>
     </div>
   )
 }
@@ -103,8 +105,8 @@ function OrdersTable({ result }: { result: Record<string, unknown> }) {
       </SectionLabel>
       <div className="-mx-1 mt-1 overflow-x-auto">
         <table className="w-full text-left text-xs">
-          <thead className="text-slate-400">
-            <tr className="border-b border-slate-100">
+          <thead className="text-muted">
+            <tr className="border-b border-line">
               <th className="px-2 py-1.5 font-medium">Order</th>
               <th className="px-2 py-1.5 font-medium">Status</th>
               <th className="px-2 py-1.5 font-medium">Location</th>
@@ -113,13 +115,13 @@ function OrdersTable({ result }: { result: Record<string, unknown> }) {
           </thead>
           <tbody>
             {orders.map((o, i) => (
-              <tr key={i} className="border-b border-slate-50 last:border-0">
-                <td className="px-2 py-1.5 font-mono text-slate-500">{str(o.order_id).slice(0, 8)}…</td>
+              <tr key={i} className="border-b border-line/60 last:border-0">
+                <td className="px-2 py-1.5 font-mono text-muted">{str(o.order_id).slice(0, 8)}…</td>
                 <td className="px-2 py-1.5"><StatusBadge status={str(o.order_status)} /></td>
-                <td className="px-2 py-1.5 text-slate-600">
+                <td className="px-2 py-1.5 text-content">
                   {str(o.customer_city) || '—'}{o.customer_state ? `, ${str(o.customer_state).toUpperCase()}` : ''}
                 </td>
-                <td className="px-2 py-1.5 text-slate-500">{fmtDate(o.order_purchase_timestamp)}</td>
+                <td className="px-2 py-1.5 text-muted">{fmtDate(o.order_purchase_timestamp)}</td>
               </tr>
             ))}
           </tbody>
@@ -139,22 +141,22 @@ function OrderDetail({ result }: { result: Record<string, unknown> }) {
     <div>
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
-          <div className="text-[11px] uppercase tracking-wide text-slate-400">Order</div>
-          <div className="truncate font-mono text-sm text-slate-700">{str(result.order_id)}</div>
+          <div className="text-[11px] uppercase tracking-wide text-muted">Order</div>
+          <div className="truncate font-mono text-sm text-content">{str(result.order_id)}</div>
         </div>
         <StatusBadge status={str(result.order_status)} large />
       </div>
-      <div className="mt-3 flex items-center gap-1.5 text-sm text-slate-600">
+      <div className="mt-3 flex items-center gap-1.5 text-sm text-content">
         <PinIcon />
         {str(result.customer_city) || 'Unknown'}
         {result.customer_state ? `, ${str(result.customer_state).toUpperCase()}` : ''}
       </div>
       {dates.length > 0 && (
-        <div className="mt-3 grid grid-cols-3 gap-2 border-t border-slate-100 pt-3">
+        <div className="mt-3 grid grid-cols-3 gap-2 border-t border-line pt-3">
           {dates.map(d => (
             <div key={d.label}>
-              <div className="text-[11px] text-slate-400">{d.label}</div>
-              <div className="text-xs font-medium text-slate-700">{fmtDate(d.value)}</div>
+              <div className="text-[11px] text-muted">{d.label}</div>
+              <div className="text-xs font-medium text-content">{fmtDate(d.value)}</div>
             </div>
           ))}
         </div>
@@ -166,7 +168,7 @@ function OrderDetail({ result }: { result: Record<string, unknown> }) {
 /* ---------- shared primitives ---------- */
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
-  return <div className="mb-2 text-sm font-semibold text-slate-700">{children}</div>
+  return <div className="mb-2 text-sm font-semibold text-content">{children}</div>
 }
 
 function BarList({
@@ -184,14 +186,14 @@ function BarList({
       {rows.map((r, i) => (
         <div key={i} className="flex items-center gap-2.5">
           {ranked && (
-            <span className="w-4 shrink-0 text-right text-xs font-semibold text-slate-300">{i + 1}</span>
+            <span className="w-4 shrink-0 text-right text-xs font-semibold text-muted">{i + 1}</span>
           )}
           <div className="min-w-0 flex-1">
             <div className="mb-0.5 flex items-baseline justify-between gap-2">
-              <span className="truncate text-xs font-medium text-slate-600">{r.label}</span>
-              <span className="shrink-0 text-xs font-semibold tabular-nums text-slate-800">{format(r.value)}</span>
+              <span className="truncate text-xs font-medium text-muted">{r.label}</span>
+              <span className="shrink-0 text-xs font-semibold tabular-nums text-content">{format(r.value)}</span>
             </div>
-            <div className="h-1.5 overflow-hidden rounded-full bg-slate-100">
+            <div className="h-1.5 overflow-hidden rounded-full bg-inset">
               <div
                 className="h-full origin-left animate-grow-bar rounded-full bg-gradient-to-r from-brand-400 to-brand-600"
                 style={{ width: `${Math.max((r.value / max) * 100, 2)}%` }}
@@ -208,15 +210,15 @@ const STATUS_TONES: Record<string, string> = {
   delivered: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
   shipped: 'bg-sky-50 text-sky-700 ring-sky-200',
   canceled: 'bg-rose-50 text-rose-700 ring-rose-200',
-  unavailable: 'bg-slate-100 text-slate-600 ring-slate-200',
+  unavailable: 'bg-inset text-muted ring-line',
   processing: 'bg-amber-50 text-amber-700 ring-amber-200',
   invoiced: 'bg-violet-50 text-violet-700 ring-violet-200',
   approved: 'bg-teal-50 text-teal-700 ring-teal-200',
-  created: 'bg-slate-100 text-slate-600 ring-slate-200',
+  created: 'bg-inset text-muted ring-line',
 }
 
 function StatusBadge({ status, large = false }: { status: string; large?: boolean }) {
-  const tone = STATUS_TONES[status.toLowerCase()] || 'bg-slate-100 text-slate-600 ring-slate-200'
+  const tone = STATUS_TONES[status.toLowerCase()] || 'bg-inset text-muted ring-line'
   return (
     <span
       className={`inline-flex items-center rounded-full font-medium capitalize ring-1 ${tone} ${
@@ -247,13 +249,13 @@ function CardFooter({
   if (!hasFooter) return null
 
   return (
-    <div className="space-y-2 border-t border-slate-100 bg-slate-50/60 px-4 py-3">
+    <div className="space-y-2 border-t border-line bg-inset/60 px-4 py-3">
       {chips.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
           {chips.map(c => (
             <span
               key={c}
-              className="inline-flex items-center rounded-md bg-white px-2 py-0.5 text-[11px] font-medium text-slate-600 ring-1 ring-slate-200"
+              className="inline-flex items-center rounded-md bg-surface px-2 py-0.5 text-[11px] font-medium text-muted ring-1 ring-line"
             >
               {c}
             </span>
@@ -273,13 +275,13 @@ function CardFooter({
 
       <div className="flex items-center justify-between gap-2">
         {source && (
-          <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-slate-400">
+          <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted">
             <VerifiedIcon />
             <span className="truncate" title={source}>Verified from {source}</span>
           </div>
         )}
         {cached && (
-          <span className="inline-flex shrink-0 items-center gap-1 rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500">
+          <span className="inline-flex shrink-0 items-center gap-1 rounded-md bg-inset px-1.5 py-0.5 text-[10px] font-medium text-muted">
             <BoltIcon /> cached
           </span>
         )}
@@ -306,7 +308,7 @@ const titleCase = (s: string) => s.replace(/\b\w/g, c => c.toUpperCase())
 
 function PinIcon() {
   return (
-    <svg viewBox="0 0 24 24" className="h-4 w-4 text-slate-400" fill="none">
+    <svg viewBox="0 0 24 24" className="h-4 w-4 text-muted" fill="none">
       <path d="M12 21s7-5.5 7-11a7 7 0 1 0-14 0c0 5.5 7 11 7 11Z" stroke="currentColor" strokeWidth="1.6" />
       <circle cx="12" cy="10" r="2.5" stroke="currentColor" strokeWidth="1.6" />
     </svg>

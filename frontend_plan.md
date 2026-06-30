@@ -30,6 +30,33 @@ Phase F-T).
 
 ---
 
+## Sequencing (cross-plan) — correctness ships before auth
+
+`backend_plan.md` front-loads the correctness fix (its **B0**) onto an
+*ephemeral, client-minted* `session_id`, decoupled from authentication — because
+the live defect (confidently-wrong follow-up answers) needs a *session id*, not a
+*logged-in user*. This frontend plan follows that ordering: the conversational
+fix (**Phase F2**) is built **early** and rides backend B0 on a client-generated
+UUID. It does **not** wait for auth or the sidebar. Theming (F-T) is independent
+and can land anytime.
+
+| Frontend phase | Pairs backend | Notes |
+|---|---|---|
+| F-T theming | — (frontend-only) | independent; do early |
+| **F2-early** conversational fix | **B0** | client-minted `session_id`, `CarryoverChip` + `ClarifyPrompt`, **no auth** |
+| F0 auth shell | B2 | login / register / me |
+| F1 sessions + history | B1 + B3 | sidebar; **upgrades** the `session_id` source: client UUID → server session |
+| **F2-final** | B4 | same components, now backed by persisted history behind auth |
+| F3 polish | — | post-alpha |
+
+The F2 components are written **once** in F2-early; only their `session_id`
+*source* changes when F1/B4 land (client UUID → server session) — mirroring the
+backend's "B0 built to B4's shape, storage swap only." Build order:
+**F-T → F2-early → F0 → F1 → F2-final → F3.** (The phase *sections* below are
+ordered F-T → F0 → F1 → F2 by topic; the **build order above** is what to follow.)
+
+---
+
 ## Backend contract this depends on
 
 The frontend cannot land ahead of these endpoints. They live on the **persistent
@@ -52,7 +79,10 @@ POST   /api/query   { question, session_id } → QueryResponse + context block
 ```
 
 `POST /api/query` gains a `session_id` and a `context` block in the response (see
-Data Contracts). Auth: **httpOnly cookie session** recommended (backend is
+Data Contracts). The `session_id` is a **client-minted UUID in F2-early** (no auth
+required — pairs backend B0) and becomes the **server-issued session id once F1
+lands**; the resolution logic and rendering are identical across the swap. Auth:
+**httpOnly cookie session** recommended (backend is
 persistent, so a server-side session is cheap and avoids XSS token theft); bearer
 token in memory is the fallback — decided under Open Questions.
 
@@ -264,7 +294,9 @@ the Claude web app.
   - if no active session, `newSession()` first (so the first message creates a
     conversation),
   - append the user message optimistically,
-  - call `POST /api/query` with `{ question, session_id: activeId }`,
+  - call `POST /api/query` with `{ question, session_id: activeId }` — `activeId`
+    is now the **server session id**, superseding F2-early's client-minted UUID
+    (the only line that changes between F2-early and F2-final),
   - append the assistant message from the response.
 - The first user message of a session sets its title (client-side truncate, or
   let the backend derive it — Open Questions).
@@ -277,17 +309,25 @@ list and from the backend.
 
 ## Phase F2 — Conversational context + visible inheritance
 
-Goal: fix the screenshot bug *in the UI*. The backend now resolves follow-ups
-against the previous turn (structured `resolved_call` from history); the frontend
-must **send the session and surface what was inherited**.
+Goal: fix the screenshot bug *in the UI*. The backend resolves follow-ups against
+the previous turn; the frontend must **send a session id and surface what was
+inherited**.
+
+**Lands in two passes** (see Sequencing): **F2-early** ships the whole UI against
+backend **B0** on a *client-minted* `session_id`, with **no auth and no sidebar**
+— this is the correctness release. **F2-final** is the *same components* once F1
+lands, with the `session_id` source swapped to the server session (backend B4).
+Nothing below changes between the two passes except where the id comes from.
 
 ### Step 1: Send the session
 
-`POST /api/query` already carries `session_id` (F1). That alone lets the backend
-read the prior turn's `{operation, args}` from history and resolve
-*"and how many for Rio de Janeiro?"* → inherit `count_low_reviews` + `last_month`,
-overlay `city`. **No extra frontend call needed** — the fix rides on F1's plumbing
-plus the backend's context-resolution layer.
+The frontend mints one `session_id` per conversation — `crypto.randomUUID()` in
+F2-early (held in memory / `localStorage`), the **server-issued session id** once
+F1 lands — and sends it on every `POST /api/query`. That alone lets the backend
+read the prior turn's `{operation, args}` and resolve *"and how many for Rio de
+Janeiro?"* → inherit `count_low_reviews` + `last_month`, overlay `city`. **No
+extra frontend call needed** — the fix rides on the `session_id` plus the
+backend's context-resolution layer (B0, later B4).
 
 ### Step 2: Render inheritance — `CarryoverChip.tsx`
 
@@ -383,15 +423,19 @@ stored preference → follows OS; live OS-theme change updates `system` mode; ha
 refresh shows no light→dark flash; spot-check contrast of brand, rose, and
 "Verified" green on the dark surface.
 
+**After F2-early (pairs backend B0, no auth):** with a client-minted
+`session_id`, the Rio-de-Janeiro two-turn transcript resolves to *low reviews for
+Rio, Jul 2018* with a visible carry-over chip; ambiguous follow-ups render the
+clarify prompt instead of a number. This is the standalone correctness release.
+
 **After F0:** register/login/logout round-trip; refresh keeps session; protected
 route redirects; 401 mid-session bounces to login.
 
 **After F1:** history survives reload; session switch loads correct messages;
 rename/delete persist to backend; first message creates + titles a session.
 
-**After F2:** the Rio-de-Janeiro two-turn transcript resolves to *low reviews for
-Rio, Jul 2018* with a visible carry-over chip; ambiguous follow-ups render the
-clarify prompt instead of a number.
+**After F2-final (pairs backend B4):** the same conversational behavior now runs
+on the server session id, persists across reloads, and is scoped to the user.
 
 **Regression:** an e2e test (Playwright) drives login → ask → follow-up → assert
 the carry-over chip and the correct operation; asserts 6,882 never renders.

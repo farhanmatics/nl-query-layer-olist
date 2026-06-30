@@ -1,5 +1,6 @@
 /** @type {import('tailwindcss').Config} */
 export default {
+  darkMode: 'class',
   content: [
     "./index.html",
     "./src/**/*.{js,ts,jsx,tsx}",
@@ -8,8 +9,9 @@ export default {
     extend: {
       fontFamily: {
         sans: [
-          'Inter', 'system-ui', '-apple-system', 'BlinkMacSystemFont',
-          'Segoe UI', 'Roboto', 'Helvetica Neue', 'Arial', 'sans-serif',
+          'Inter Variable', 'Inter', 'system-ui', '-apple-system',
+          'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'Helvetica Neue',
+          'Arial', 'sans-serif',
         ],
         mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace'],
       },
@@ -19,6 +21,18 @@ export default {
           400: '#818cf8', 500: '#6366f1', 600: '#4f46e5', 700: '#4338ca',
           800: '#3730a3', 900: '#312e81',
         },
+        // Semantic tokens (see index.css). <alpha-value> keeps opacity utils.
+        bg: 'rgb(var(--bg) / <alpha-value>)',
+        surface: 'rgb(var(--surface) / <alpha-value>)',
+        inset: 'rgb(var(--inset) / <alpha-value>)',
+        content: 'rgb(var(--content) / <alpha-value>)',
+        muted: 'rgb(var(--muted) / <alpha-value>)',
+        line: 'rgb(var(--line) / <alpha-value>)',
+        // Active/selected row state. Uses two triplets so we can layer
+        // the background tint (alpha) over a brand-colored ring/border.
+        active: 'rgb(var(--active-bg) / var(--active-bg-alpha))',
+        'active-ring': 'rgb(var(--active-ring) / <alpha-value>)',
+        'active-content': 'rgb(var(--active-content) / <alpha-value>)',
       },
       boxShadow: {
         soft: '0 1px 2px 0 rgb(15 23 42 / 0.04), 0 4px 16px -4px rgb(15 23 42 / 0.08)',

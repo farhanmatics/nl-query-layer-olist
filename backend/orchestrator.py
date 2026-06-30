@@ -8,11 +8,78 @@ from config import settings
 from cache import translation_cache, translation_key
 from errors import client_error
 from validation.scope import detect_unsupported_concept
+from resolver import classify_turn, resolve as resolve_call, get_prior_state, store_state
 
 logger = logging.getLogger(__name__)
 
 
-async def process_question(question: str):
+def _empty_context() -> dict:
+    return {"inherited": False, "from_operation": None, "carried": {}, "clarify": None}
+
+
+async def _persist_turn(
+    session_id: str,
+    user_id: str,
+    question: str,
+    response: dict,
+    resolved_args: Optional[dict] = None,
+) -> None:
+    """Persist a (user question, assistant response) pair to the durable
+    session history. B3 prepares for B4: the assistant row's `resolved_call`
+    is the *input-shaped* {operation, args} that the resolver needs to inherit
+    on a follow-up (e.g. date_token="last_month", NOT the resolved
+    date_range=[iso, iso] which isn't a re-dispatchable kwarg).
+
+    `resolved_args` is supplied ONLY on a fully-resolved success turn — it is
+    the same input-shaped dict the ephemeral B0 store keeps. Clarify/error/
+    parse-fail turns pass nothing, so resolved_call stays NULL and
+    `get_last_resolved_call` correctly skips them (per the plan).
+
+    Ownership has already been verified by the caller; this helper writes
+    to the session it was given.
+    """
+    import appdb
+    try:
+        await appdb.insert_message(
+            session_id=session_id,
+            role="user",
+            question=question,
+        )
+        op = response.get("operation")
+        resolved_call = None
+        if (
+            resolved_args is not None
+            and op
+            and not response.get("error")
+            and not (response.get("context") or {}).get("clarify")
+        ):
+            resolved_call = json.dumps({"operation": op, "args": resolved_args})
+        await appdb.insert_message(
+            session_id=session_id,
+            role="assistant",
+            response_json=json.dumps(response, default=str),
+            resolved_call=resolved_call,
+        )
+        # Bump last_active_at so the session floats to the top of the sidebar.
+        await appdb.touch_chat_session(session_id, user_id)
+        # First message titles an untitled ("New chat") conversation. No-op if
+        # the session already has a title. Done LAST: it's cosmetic and must
+        # never abort the critical message/resolved_call writes above.
+        await appdb.set_session_title_if_unset(
+            session_id, user_id, appdb.derive_session_title(question)
+        )
+    except Exception as e:
+        # Persistence is best-effort. The user already got their answer
+        # (or an error). Log and move on; the next turn will create new
+        # rows either way.
+        logger.warning(f"Failed to persist turn for session {session_id}: {e}")
+
+
+async def process_question(
+    question: str,
+    session_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+):
     """
     Main orchestration pipeline:
     1. Build system prompt with tool schemas
@@ -21,19 +88,33 @@ async def process_question(question: str):
     4. Execute parameterized query
     5. Format answer with Ollama
     6. Return structured response
+
+    session_id (optional): if provided, the backend resolves this turn
+    against the prior turn's state in the same session (B0 conversational
+    resolution). Absent = single-shot, no context.
+
+    user_id (optional, B3+): when both user_id and session_id are present,
+    the session is treated as a *durable* server-side conversation and the
+    (user, assistant) pair is persisted to it. When session_id is absent
+    or user_id is absent, the existing B0 ephemeral store is used. This
+    lets F2-early (no auth) keep working unchanged.
     """
+    durable = bool(user_id and session_id)
     try:
         logger.info(f"Starting orchestration for: {question}")
 
         # Out-of-scope guard: decline concepts the schema can't answer (returns,
         # refunds, profit, inventory, ...) instead of letting the model map them
         # onto a proxy and return a confidently wrong number.
+        from schemas import get_active_config
         unsupported = detect_unsupported_concept(question)
         if unsupported:
             logger.info(f"Declining unsupported concept: {unsupported['concept']}")
-            return {
+            cfg = get_active_config()
+            response = {
                 "error": (
-                    f"This dataset doesn't track {unsupported['concept']}. "
+                    f"The {cfg.display_name} dataset doesn't track "
+                    f"{unsupported['concept']}. "
                     f"{unsupported['suggestion']}"
                 ),
                 "operation": None,
@@ -42,7 +123,11 @@ async def process_question(question: str):
                 "formatted_answer": None,
                 "source": None,
                 "cached": False,
+                "context": _empty_context(),
             }
+            if durable:
+                await _persist_turn(session_id, user_id, question, response)
+            return response
 
         from functions.registry import get_all_schemas
 
@@ -74,7 +159,7 @@ async def process_question(question: str):
         logger.info(f"LLM selected tool: {tool_call.get('tool')}")
 
         if not tool_call or "error" in tool_call:
-            return {
+            response = {
                 "error": tool_call.get("error", "Failed to parse LLM response"),
                 "operation": None,
                 "filters": None,
@@ -82,17 +167,59 @@ async def process_question(question: str):
                 "formatted_answer": None,
                 "source": None,
                 "cached": from_cache,
+                "context": _empty_context(),
             }
+            if durable:
+                await _persist_turn(session_id, user_id, question, response)
+            return response
 
-        tool_name = tool_call.get("tool")
-        args = dict(tool_call.get("args", {}) or {})
+        candidate = {"tool": tool_call.get("tool"), "args": dict(tool_call.get("args", {}) or {})}
+
+        # B0 conversational resolution: classify FRESH vs FOLLOW_UP and merge
+        # with prior state if applicable. After this, `tool_name` and `args`
+        # are the final values the rest of the pipeline dispatches on.
+        # When the session is durable, load prior state from the DB (B4 prep);
+        # otherwise fall back to the B0 in-memory store.
+        if durable:
+            import appdb
+            prior = await appdb.get_last_resolved_call(session_id)
+        else:
+            prior = get_prior_state(session_id)
+        classification = classify_turn(question, candidate.get("tool"))
+        resolved = resolve_call(question, candidate, prior, classification)
+        tool_name = resolved["operation"]
+        args = resolved["args"]
+        context = resolved["context"]
+
+        # Clarify path: the resolver declined (e.g. inherited op can't filter
+        # by a named place). Return a response that the frontend renders as a
+        # quick-reply prompt. Do NOT store this turn as new state.
+        if context.get("clarify"):
+            logger.info(
+                f"Clarify: {context['clarify'].get('prompt')!r} "
+                f"(inherited from {context.get('from_operation')})"
+            )
+            response = {
+                "operation": None,
+                "filters": None,
+                "result": None,
+                "formatted_answer": None,
+                "source": None,
+                "cached": from_cache,
+                "context": context,
+            }
+            if durable:
+                # Persist the clarify turn too (so reload shows the prompt)
+                # but with resolved_call=NULL so get_last_resolved_call skips it.
+                await _persist_turn(session_id, user_id, question, response)
+            return response
 
         # Filter-faithfulness guard: catch filters the model dropped before they
         # turn into a confidently wrong answer (see validation/faithfulness.py).
         guard = apply_filter_guard(question, tool_name, args)
         if guard.get("unresolved"):
             missing = ", ".join(guard["unresolved"])
-            return {
+            response = {
                 "error": (
                     f"Your question references {missing}, but this type of query "
                     "can't be filtered by that, so I won't return a number that "
@@ -106,12 +233,17 @@ async def process_question(question: str):
                 "source": None,
                 "cached": from_cache,
                 "guard": guard,
+                "context": context,
             }
+            if durable:
+                await _persist_turn(session_id, user_id, question, response)
+            return response
 
         result = await dispatch_function(tool_name, args)
 
         if "error" in result:
-            return {
+            # Don't overwrite prior state on error.
+            response = {
                 "error": result.get("error"),
                 "operation": tool_name,
                 "filters": result.get("filters"),
@@ -120,20 +252,54 @@ async def process_question(question: str):
                 "source": None,
                 "cached": from_cache,
                 "guard": guard,
+                "context": context,
             }
+            if durable:
+                await _persist_turn(session_id, user_id, question, response)
+            return response
 
         formatted_answer = await format_answer(tool_name, result)
 
-        return {
-            "operation": tool_name,
-            "filters": result.get("filters"),
-            "result": {k: v for k, v in result.items() if k != "filters"},
-            "formatted_answer": formatted_answer,
-            "source": get_source_citation(tool_name),
-            "error": None,
-            "cached": from_cache,
-            "guard": guard,
+        # Persist successful turn for future follow-ups in the same session.
+        # For durable sessions: write to the messages table. For ephemeral
+        # (F2-early) sessions: keep the B0 in-memory store. BOTH persist the
+        # same input-shaped args (date_token, not the resolved date_range) so a
+        # follow-up can re-dispatch and the date isn't silently dropped.
+        stored_args = {
+            k: v for k, v in (args or {}).items()
+            if v not in (None, "", [], {})
         }
+        if durable:
+            response = {
+                "operation": tool_name,
+                "filters": result.get("filters"),
+                "result": {k: v for k, v in result.items() if k != "filters"},
+                "formatted_answer": formatted_answer,
+                "source": get_source_citation(tool_name),
+                "error": None,
+                "cached": from_cache,
+                "guard": guard,
+                "context": context,
+            }
+            await _persist_turn(
+                session_id, user_id, question, response, resolved_args=stored_args
+            )
+            return response
+        else:
+            # B0 ephemeral state store.
+            if session_id:
+                store_state(session_id, tool_name, stored_args)
+            return {
+                "operation": tool_name,
+                "filters": result.get("filters"),
+                "result": {k: v for k, v in result.items() if k != "filters"},
+                "formatted_answer": formatted_answer,
+                "source": get_source_citation(tool_name),
+                "error": None,
+                "cached": from_cache,
+                "guard": guard,
+                "context": context,
+            }
 
     except Exception as e:
         logger.error(f"Orchestration failed: {e}", exc_info=True)
@@ -144,13 +310,31 @@ async def process_question(question: str):
             "result": None,
             "formatted_answer": None,
             "source": None,
+            "context": _empty_context(),
         }
 
 
 def build_system_prompt(tool_schemas: list[dict]) -> str:
-    """Build the system prompt for the LLM with tool definitions and few-shot examples."""
+    """Build the system prompt for the LLM with tool definitions and few-shot examples.
+
+    The dataset description, status/state/city/group_by rule text, the
+    few-shot examples, and the source-citation strings are all read
+    from the active SchemaConfig (so they automatically reflect
+    whichever schema is selected via the `SCHEMA` env var).
+    """
+    from schemas import get_active_config
+    cfg = get_active_config()
+    prompt = cfg.prompt
     schema_json = json.dumps(tool_schemas, indent=2)
-    return f"""You are a data query assistant. Your ONLY job is to convert a natural language question into a single JSON function call. You must extract ALL filters mentioned in the question — never drop any.
+
+    examples_text = "\n\n".join(
+        f'Q: "{q}"\nA: {a}'
+        for q, a in prompt.few_shot_examples
+    )
+
+    return f"""You are a data query assistant. Your ONLY job is to convert a natural language question into a single JSON function call against the {cfg.display_name} dataset. You must extract ALL filters mentioned in the question — never drop any.
+
+{prompt.dataset_description}
 
 TOOLS:
 {schema_json}
@@ -168,69 +352,14 @@ DATE TOKENS (use exactly these strings when the question mentions time):
 - "this_year", "last_year"
 - OR an explicit range: {{"from": "YYYY-MM-DD", "to": "YYYY-MM-DD"}}
 
-CITY RULES: normalize to lowercase without accents (e.g., "São Paulo" → "sao paulo", "Rio de Janeiro" → "rio de janeiro").
-STATE RULES: use 2-letter Brazilian UF codes (e.g., "SP", "RJ", "MG").
-STATUS RULES: valid order statuses are delivered, shipped, canceled, processing, invoiced, unavailable, approved, created. Pass the status verbatim from this list.
-GROUP_BY RULES: when a question says "by X" / "broken down by X" / "grouped by X" / "per X" (X = state, category, or month), set group_by to that dimension.
+CITY RULES: {prompt.city_rule}
+STATE RULES: {prompt.state_rule}
+STATUS RULES: {prompt.status_rule}
+GROUP_BY RULES: {prompt.group_by_rule}
 
 --- FEW-SHOT EXAMPLES ---
 
-Q: "How many delivered orders did we have in São Paulo last month?"
-A: {{"tool": "count_orders", "args": {{"city": "sao paulo", "status": "delivered", "date_token": "last_month"}}}}
-
-Q: "How many canceled orders this year?"
-A: {{"tool": "count_orders", "args": {{"status": "canceled", "date_token": "this_year"}}}}
-
-Q: "How many orders in Rio de Janeiro last week?"
-A: {{"tool": "count_orders", "args": {{"city": "rio de janeiro", "date_token": "last_week"}}}}
-
-Q: "What is the status of order abc123?"
-A: {{"tool": "get_order_status", "args": {{"order_id": "abc123"}}}}
-
-Q: "How many shipped orders do we have?"
-A: {{"tool": "count_orders", "args": {{"status": "shipped"}}}}
-
-Q: "Total orders in SP this month?"
-A: {{"tool": "count_orders", "args": {{"state": "SP", "date_token": "this_month"}}}}
-
-Q: "What was our total revenue last month?"
-A: {{"tool": "get_revenue", "args": {{"date_token": "last_month"}}}}
-
-Q: "Revenue by state this year"
-A: {{"tool": "get_revenue", "args": {{"date_token": "this_year", "group_by": "state"}}}}
-
-Q: "Show revenue broken down by category"
-A: {{"tool": "get_revenue", "args": {{"group_by": "category"}}}}
-
-Q: "Total revenue in MG last year"
-A: {{"tool": "get_revenue", "args": {{"state": "MG", "date_token": "last_year"}}}}
-
-Q: "How much revenue did the health_beauty category make?"
-A: {{"tool": "get_revenue", "args": {{"category": "health_beauty"}}}}
-
-Q: "How many approved orders last year?"
-A: {{"tool": "count_orders", "args": {{"status": "approved", "date_token": "last_year"}}}}
-
-Q: "How many low reviews did we get last month?"
-A: {{"tool": "count_low_reviews", "args": {{"date_token": "last_month"}}}}
-
-Q: "How many 1-star or 2-star reviews in Sao Paulo?"
-A: {{"tool": "count_low_reviews", "args": {{"score_max": 2, "city": "sao paulo"}}}}
-
-Q: "What are our best-selling products?"
-A: {{"tool": "top_products", "args": {{"by": "count", "limit": 10}}}}
-
-Q: "Top 5 products by revenue this year"
-A: {{"tool": "top_products", "args": {{"by": "revenue", "limit": 5, "date_token": "this_year"}}}}
-
-Q: "Show me delivered orders in Sao Paulo"
-A: {{"tool": "list_orders", "args": {{"city": "sao paulo", "status": "delivered"}}}}
-
-Q: "List the next 20 canceled orders"
-A: {{"tool": "list_orders", "args": {{"status": "canceled", "limit": 20}}}}
-
-Q: "List 30 shipped orders in MG"
-A: {{"tool": "list_orders", "args": {{"state": "MG", "status": "shipped", "limit": 30}}}}
+{examples_text}
 
 --- END EXAMPLES ---
 
@@ -485,13 +614,14 @@ def _filter_str(filters: dict) -> str:
 
 
 def get_source_citation(tool_name: str) -> str:
-    """Return the source citation for a query."""
-    citations = {
-        "get_order_status": "olist_orders_dataset JOIN olist_customers_dataset",
-        "count_orders": "olist_orders_dataset JOIN olist_customers_dataset",
-        "get_revenue": "olist_order_payments_dataset / olist_order_items_dataset JOIN olist_orders_dataset",
-        "count_low_reviews": "olist_order_reviews_dataset JOIN olist_orders_dataset",
-        "top_products": "olist_order_items_dataset JOIN olist_products_dataset, product_category_name_translation",
-        "list_orders": "olist_orders_dataset JOIN olist_customers_dataset",
-    }
-    return citations.get(tool_name, "olist_orders_dataset")
+    """Return the source citation for a query.
+
+    Reads from the active SchemaConfig's `source_citations` dict. If a
+    tool doesn't have an entry (e.g. a stub schema where the function
+    isn't wired), falls back to a generic "this dataset" string so
+    the citation surface is never empty.
+    """
+    from schemas import get_active_config
+    cfg = get_active_config()
+    citations = cfg.prompt.source_citations
+    return citations.get(tool_name, f"{cfg.display_name} (source unspecified)")

@@ -1,6 +1,10 @@
 from pydantic_settings import BaseSettings
 from datetime import datetime
 
+# The placeholder session secret. The boot path refuses to start in production
+# while this is still in use (see main.startup).
+DEFAULT_SESSION_SECRET = "dev-only-change-me-in-production-please"
+
 
 class Settings(BaseSettings):
     db_url: str = "postgresql://nlq_readonly:changeme@localhost/olist"
@@ -27,6 +31,13 @@ class Settings(BaseSettings):
     api_host: str = "0.0.0.0"
     api_port: int = 8000
 
+    # Phase 3 — which schema config to load at startup. One of the keys
+    # registered in `schemas/__init__.py::_BUILTIN`. Add a new schema by
+    # dropping a config module under `schemas/<name>/` and registering
+    # the loader — then set SCHEMA_NAME=<name>. The orchestrator's prompt,
+    # validation layer, and SQL emitter all read from this config.
+    schema_name: str = "olist"
+
     allowed_origins: str = "http://localhost:3000,http://localhost:5173"
 
     # Phase 2 audit log: one JSON line per request for trust/verification.
@@ -50,9 +61,52 @@ class Settings(BaseSettings):
     # in production, but sufficient for single-tenant local/VPS deployments.
     rate_limit_per_minute: int = 30
 
+    # B0 conversational resolution: ephemeral context TTL (minutes).
+    # session_id -> ConversationState entries expire after this long so a stale
+    # session can't cause a "carried from 2 hours ago" follow-up to land wrong.
+    context_ttl_minutes: int = 30
+    context_max_entries: int = 1024
+
+    # B1/B2 — app-state store and auth. SQLite is the dev/single-tenant engine;
+    # a Postgres DSN is a drop-in later. The running app connects with both
+    # this URL (read-write) and db_url (read-only Olist). Keep them separate.
+    app_db_url: str = "sqlite:///app_state.db"
+
+    # Deployment environment. When "production"/"prod", the boot path enforces
+    # strict checks (refuses the default session_secret below) and expects
+    # cookie_secure=true. Keep "development" for local work.
+    environment: str = "development"
+
+    # Secure flag on the auth cookies. MUST be true on any HTTPS/production
+    # deploy so the session cookie is never sent over plaintext. This is
+    # explicit config rather than inferred from the bind address, because
+    # production typically still binds 0.0.0.0 behind a reverse proxy.
+    cookie_secure: bool = False
+
+    # B2 — auth secrets. The session secret signs the *session cookie token*
+    # (itsdangerous wrapper around the auth_sessions row id). The CSRF token is
+    # a separate random value (double-submit), not signed with this. MUST be
+    # overridden in production — the boot path refuses the default below.
+    session_secret: str = DEFAULT_SESSION_SECRET
+    session_ttl_minutes: int = 43200  # 30 days (fixed expiry; not yet rolling)
+
+    # Stricter per-email+IP rate limit on /api/auth/*. Brutes blunt.
+    # Format: "max_attempts/window_seconds". 0 means disabled.
+    auth_rate_limit: str = "5/900"  # 5 failures per 15 minutes
+
+    # Argon2id cost knobs. Tunable per environment. Defaults are reasonable
+    # for production (tens of ms to verify on a modern CPU).
+    argon2_time_cost: int = 3
+    argon2_memory_cost: int = 65536  # 64 MiB
+    argon2_parallelism: int = 1
+
     class Config:
         env_file = ".env"
         case_sensitive = False
+
+    @property
+    def is_production(self) -> bool:
+        return self.environment.strip().lower() in ("production", "prod")
 
     @property
     def allowed_origins_list(self) -> list[str]:

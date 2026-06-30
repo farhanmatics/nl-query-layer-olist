@@ -1,3 +1,4 @@
+import asyncio
 import asyncpg
 from asyncpg.pool import Pool
 from typing import Optional
@@ -7,6 +8,12 @@ import logging
 logger = logging.getLogger(__name__)
 
 _pool: Optional[Pool] = None
+# The loop the pool was created under. An asyncpg pool is bound to its loop;
+# reusing it from a different loop raises "attached to a different loop". In
+# production there is exactly one loop so this never changes. Under pytest,
+# each TestClient instance spins its own loop — track the loop so we can
+# transparently recreate the pool instead of crashing on teardown.
+_pool_loop: Optional[asyncio.AbstractEventLoop] = None
 
 
 class RowCapExceeded(Exception):
@@ -22,7 +29,20 @@ class RowCapExceeded(Exception):
 
 
 async def get_pool() -> Pool:
-    global _pool
+    global _pool, _pool_loop
+    loop = asyncio.get_event_loop()
+    if _pool is not None and _pool_loop is not loop:
+        # Cached pool belongs to a different loop (e.g. a previous TestClient
+        # instance whose loop is now closed). It can't be awaited/closed from
+        # here, but we MUST release its Postgres connections or repeated loops
+        # leak the pool until the server hits max_connections. terminate() is
+        # synchronous (no loop needed) and force-closes the sockets.
+        try:
+            _pool.terminate()
+        except Exception as e:  # pragma: no cover - best effort cleanup
+            logger.warning(f"Failed to terminate stale pool: {e}")
+        _pool = None
+        _pool_loop = None
     if _pool is None:
         _pool = await asyncpg.create_pool(
             settings.db_url,
@@ -30,16 +50,24 @@ async def get_pool() -> Pool:
             max_size=settings.db_pool_max,
             command_timeout=settings.db_statement_timeout / 1000,
         )
+        _pool_loop = loop
         logger.info(f"Created asyncpg pool: {settings.db_pool_min}-{settings.db_pool_max} connections")
     return _pool
 
 
 async def close_pool() -> None:
-    global _pool
+    global _pool, _pool_loop
     if _pool is not None:
-        await _pool.close()
-        _pool = None
-        logger.info("Closed asyncpg pool")
+        try:
+            await _pool.close()
+            logger.info("Closed asyncpg pool")
+        except RuntimeError as e:
+            # Pool bound to a different/closed loop (test teardown ordering).
+            # Nothing we can do on this loop; drop the reference.
+            logger.warning(f"Skipped cross-loop pool close: {e}")
+        finally:
+            _pool = None
+            _pool_loop = None
 
 
 async def check_db_health() -> bool:
