@@ -37,6 +37,10 @@ interface SessionContextValue {
   messages: MessageRecord[]
   isLoadingList: boolean
   isLoadingMessages: boolean
+  /** Whether the conversations drawer is open (controlled from the rail). */
+  drawerOpen: boolean
+  openDrawer: () => void
+  closeDrawer: () => void
   /**
    * Create a new server session and make it active. An optional title is
    * passed straight to the backend (used to title a conversation from its
@@ -64,6 +68,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [messages, setMessages] = useState<MessageRecord[]>([])
   const [isLoadingList, setIsLoadingList] = useState(false)
   const [isLoadingMessages, setIsLoadingMessages] = useState(false)
+  const [drawerOpen, setDrawerOpen] = useState(false)
   // A freshly created session has no server-side messages yet. Skip the
   // load for it once, so the message-load effect can't clobber an optimistic
   // appendTurn with an empty list (a race when create + send happen together).
@@ -209,6 +214,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       messages,
       isLoadingList,
       isLoadingMessages,
+      drawerOpen,
+      openDrawer: () => setDrawerOpen(true),
+      closeDrawer: () => setDrawerOpen(false),
       newSession,
       selectSession,
       renameSession,
@@ -221,6 +229,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       messages,
       isLoadingList,
       isLoadingMessages,
+      drawerOpen,
       newSession,
       selectSession,
       renameSession,

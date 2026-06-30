@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTheme, type Theme } from '../theme/ThemeContext'
+import { useClickOutside } from '../hooks/useClickOutside'
 
 /**
  * Account menu (F3). Replaces the inline 'Sign out' chip with a small
@@ -12,27 +13,30 @@ import { useTheme, type Theme } from '../theme/ThemeContext'
 export function AccountMenu({
   email,
   onLogout,
+  compact = false,
 }: {
   email: string
   onLogout: () => void | Promise<void>
+  /**
+   * When true, render just the avatar (no email text, no caret). Used
+   * in the icon rail where horizontal space is 56px.
+   */
+  compact?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const buttonRef = useRef<HTMLButtonElement | null>(null)
   const { theme, setTheme } = useTheme()
 
+  useClickOutside(wrapRef, () => setOpen(false), open)
+
   useEffect(() => {
     if (!open) return
-    const onClick = (e: MouseEvent) => {
-      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false)
-    }
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setOpen(false)
     }
-    document.addEventListener('mousedown', onClick)
     document.addEventListener('keydown', onKey)
     return () => {
-      document.removeEventListener('mousedown', onClick)
       document.removeEventListener('keydown', onKey)
     }
   }, [open])
@@ -53,15 +57,27 @@ export function AccountMenu({
         aria-label="Account menu"
         aria-expanded={open}
         aria-haspopup="menu"
-        className="inline-flex h-8 items-center gap-1.5 rounded-full border border-line bg-surface pl-1 pr-2 text-xs text-content transition hover:bg-inset"
+        className={
+          compact
+            ? "flex h-9 w-9 items-center justify-center rounded-full border border-line bg-surface transition hover:bg-inset focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-300"
+            : "inline-flex h-8 items-center gap-1.5 rounded-full border border-line bg-surface pl-1 pr-2 text-xs text-content transition hover:bg-inset"
+        }
       >
-        <span className="flex h-6 w-6 items-center justify-center rounded-full bg-brand-600 text-[11px] font-semibold text-white">
+        <span
+          className={
+            compact
+              ? "flex h-7 w-7 items-center justify-center rounded-full bg-brand-600 text-[11px] font-semibold text-white"
+              : "flex h-6 w-6 items-center justify-center rounded-full bg-brand-600 text-[11px] font-semibold text-white"
+          }
+        >
           {initials}
         </span>
-        <span className="hidden max-w-[12ch] truncate sm:inline" title={email}>
-          {email}
-        </span>
-        <CaretIcon open={open} />
+        {!compact && (
+          <span className="hidden max-w-[12ch] truncate sm:inline" title={email}>
+            {email}
+          </span>
+        )}
+        {!compact && <CaretIcon open={open} />}
       </button>
 
       {open && (

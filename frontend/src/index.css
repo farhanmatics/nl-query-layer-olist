@@ -12,15 +12,30 @@
   --content: 15 23 42;      /* slate-900 — primary text */
   --muted: 100 116 139;     /* slate-500 — secondary text */
   --line: 226 232 240;      /* slate-200 — borders */
+  /* Active/selected row state: subtle tinted background + matching
+     ring. Light mode uses a soft purple; dark mode uses a slightly
+     lifted brand hue so the selection reads clearly without
+     blowing out the contrast. */
+  --active-bg: 99 102 241;   /* brand-600 */
+  --active-bg-alpha: 0.1;    /* faded into surface */
+  --active-ring: 99 102 241; /* brand-600 */
+  --active-content: 67 56 202; /* brand-700 — readable on tinted bg */
   color-scheme: light;
 }
 .dark {
-  --bg: 2 6 23;             /* slate-950 */
-  --surface: 15 23 42;      /* slate-900 */
-  --inset: 30 41 59;        /* slate-800 */
-  --content: 226 232 240;   /* slate-200 */
-  --muted: 148 163 184;     /* slate-400 */
-  --line: 30 41 59;         /* slate-800 */
+  /* Elevation ladder: the page void sits darkest, surfaces lift clearly above
+     it, and a visible hairline edges each surface. Shadows don't read on dark,
+     so depth comes from these stepped tones + borders, not box-shadow. */
+  --bg: 2 6 23;             /* slate-950 — page void */
+  --surface: 20 27 44;      /* lifted panel / header / cards (above bg) */
+  --inset: 32 42 63;        /* deeper fills inside a surface */
+  --content: 226 232 240;   /* slate-200 — primary text */
+  --muted: 148 163 184;     /* slate-400 — secondary text */
+  --line: 44 54 76;         /* visible hairline edge on dark surfaces */
+  --active-bg: 129 140 248; /* brand-400 — a brighter hue that reads on dark */
+  --active-bg-alpha: 0.2;   /* more visible against the dark surface */
+  --active-ring: 129 140 248; /* brand-400 */
+  --active-content: 199 210 254; /* brand-200 — light enough on dark */
   color-scheme: dark;
 }
 

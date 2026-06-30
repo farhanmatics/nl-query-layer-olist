@@ -2,11 +2,18 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook } from '@testing-library/react'
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts'
 
-function fireKey(opts: { metaKey?: boolean; ctrlKey?: boolean; key: string; target?: EventTarget | null }) {
+function fireKey(opts: {
+  metaKey?: boolean
+  ctrlKey?: boolean
+  shiftKey?: boolean
+  key: string
+  target?: EventTarget | null
+}) {
   const event = new KeyboardEvent('keydown', {
     key: opts.key,
     metaKey: !!opts.metaKey,
     ctrlKey: !!opts.ctrlKey,
+    shiftKey: !!opts.shiftKey,
     bubbles: true,
     cancelable: true,
   })
@@ -91,5 +98,56 @@ describe('useKeyboardShortcuts', () => {
     fireKey({ key: 'a' })
     fireKey({ key: 'Enter' })
     expect(onNewChat).not.toHaveBeenCalled()
+  })
+
+  // --- Drawer toggle (Cmd+B / Cmd+Shift+O) ------------------------------
+
+  it('fires onToggleDrawer on Cmd+B', () => {
+    const onToggleDrawer = vi.fn()
+    renderHook(() =>
+      useKeyboardShortcuts({ enabled: true, onNewChat: () => {}, onToggleDrawer })
+    )
+    fireKey({ metaKey: true, key: 'b' })
+    expect(onToggleDrawer).toHaveBeenCalledTimes(1)
+  })
+
+  it('fires onToggleDrawer on Ctrl+B (non-mac)', () => {
+    const onToggleDrawer = vi.fn()
+    renderHook(() =>
+      useKeyboardShortcuts({ enabled: true, onNewChat: () => {}, onToggleDrawer })
+    )
+    fireKey({ ctrlKey: true, key: 'b' })
+    expect(onToggleDrawer).toHaveBeenCalledTimes(1)
+  })
+
+  it('fires onToggleDrawer on Cmd+Shift+O (alternative shortcut)', () => {
+    const onToggleDrawer = vi.fn()
+    renderHook(() =>
+      useKeyboardShortcuts({ enabled: true, onNewChat: () => {}, onToggleDrawer })
+    )
+    fireKey({ metaKey: true, shiftKey: true, key: 'o' })
+    expect(onToggleDrawer).toHaveBeenCalledTimes(1)
+  })
+
+  it('fires onToggleDrawer even when typing in an input (command-palette pattern)', () => {
+    // Like Cmd+K, the drawer toggle is intentionally a global shortcut
+    // (works regardless of focus). The user might be in the composer
+    // input and want to switch conversations.
+    const onToggleDrawer = vi.fn()
+    renderHook(() =>
+      useKeyboardShortcuts({ enabled: true, onNewChat: () => {}, onToggleDrawer })
+    )
+    const input = document.createElement('input')
+    document.body.appendChild(input)
+    fireKey({ metaKey: true, key: 'b', target: input })
+    expect(onToggleDrawer).toHaveBeenCalledTimes(1)
+    document.body.removeChild(input)
+  })
+
+  it('does nothing if onToggleDrawer is not provided', () => {
+    // No error: just no-op.
+    renderHook(() => useKeyboardShortcuts({ enabled: true, onNewChat: () => {} }))
+    fireKey({ metaKey: true, key: 'b' })
+    // No assertion needed — the test is "does not throw".
   })
 })

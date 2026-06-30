@@ -52,10 +52,12 @@ export function ResultCard({ response }: { response: QueryResponse }) {
 /* ---------- per-operation views ---------- */
 
 function StatCard({ value, unit, tone = 'brand' }: { value: string; unit: string; tone?: 'brand' | 'rose' }) {
-  const color = tone === 'rose' ? 'text-rose-600' : 'text-brand-600'
+  const color =
+    tone === 'rose' ? 'text-rose-600 dark:text-rose-400' : 'text-brand-600 dark:text-brand-400'
   return (
     <div className="py-2 text-center">
-      <div className={`text-5xl font-bold tracking-tight ${color}`}>{value}</div>
+      {/* tabular-nums: digits align on a fixed grid so big counts read precise */}
+      <div className={`text-5xl font-bold tracking-tight tabular-nums ${color}`}>{value}</div>
       <div className="mt-1 text-sm font-medium text-muted">{unit}</div>
     </div>
   )

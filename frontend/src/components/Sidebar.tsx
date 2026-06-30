@@ -1,24 +1,20 @@
 import { useState, useRef, useEffect } from 'react'
 import { useSession } from '../session/SessionContext'
+import { useSwipeToClose } from '../hooks/useSwipeToClose'
 
 /**
- * Conversation sidebar (F1). Lists the caller's sessions, lets them
- * start a new one, switch, rename (inline), and delete (with confirm).
+ * Conversations drawer (Claude-style). Slides in from the left when
+ * `open` is true; lives in an overlay so the chat panel keeps its full
+ * width whether the drawer is open or not. Closes itself when the user
+ * selects, renames, or deletes a session.
  *
- * Two layout modes (F3):
- *   - `variant="column"` (default): always visible as a 256px column.
- *     Used on `sm:` and up.
- *   - `variant="drawer"`: a slide-in overlay, hidden by default,
- *     toggled via `open`. Used on `<sm` for the mobile experience.
+ * Width: ~280px on `sm:` and up, full-width on smaller screens. Animates
+ * in/out with a 200ms translate.
  */
 export function Sidebar({
-  disabled = false,
-  variant = 'column',
   open = false,
   onClose,
 }: {
-  disabled?: boolean
-  variant?: 'column' | 'drawer'
   open?: boolean
   onClose?: () => void
 }) {
@@ -32,13 +28,27 @@ export function Sidebar({
     deleteSession,
   } = useSession()
 
+  // Swipe-to-close on mobile: a leftward drag past 80px closes the drawer.
+  const drawerRef = useRef<HTMLElement | null>(null)
+  useSwipeToClose(drawerRef, () => onClose?.(), { enabled: open })
+
+  // Close on Esc (the rail already does this too, but the drawer is
+  // an independent surface so it owns its own key handling).
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose?.()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [open, onClose])
+
   const handleNew = async () => {
     try {
       await newSession()
-      // In drawer mode, dismiss so the user can see the new chat.
       onClose?.()
     } catch {
-      /* AuthContext will bounce anon users; nothing to surface here */
+      /* anon users are bounced by AuthContext */
     }
   }
 
@@ -48,32 +58,35 @@ export function Sidebar({
   }
 
   return (
-    <aside
-      className={
-        variant === 'drawer'
-          ? `fixed inset-y-0 left-0 z-40 w-72 transform border-r border-line bg-surface transition-transform duration-200 ${
-              open ? 'translate-x-0' : '-translate-x-full'
-            }`
-          : 'flex h-full w-full flex-col border-r border-line bg-surface'
-      }
-      aria-label="Conversations"
-    >
-      <div className="flex items-center justify-between gap-2 border-b border-line px-3 py-3">
-        <h2 className="text-xs font-semibold uppercase tracking-wide text-muted">
-          Conversations
-        </h2>
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={handleNew}
-            disabled={disabled}
-            className="inline-flex h-7 items-center gap-1 rounded-md border border-line bg-surface px-2 text-xs font-medium text-content transition hover:border-brand-300 hover:bg-brand-50 disabled:cursor-not-allowed disabled:opacity-50"
-            aria-label="Start a new conversation"
-          >
-            <PlusIcon />
-            New
-          </button>
-          {variant === 'drawer' && (
+    <>
+      {/* Backdrop: click outside the panel to close. The panel itself
+          stops propagation so clicks inside the panel don't trigger close. */}
+      {open && (
+        <button
+          type="button"
+          aria-label="Close conversations"
+          onClick={onClose}
+          className="fixed inset-0 z-30 bg-black/40 backdrop-blur-sm"
+        />
+      )}
+      <aside
+        ref={drawerRef}
+        aria-label="Conversations"
+        className={`fixed inset-y-0 left-0 z-40 w-72 max-w-[85vw] transform border-r border-line bg-surface shadow-lift transition-transform duration-200 ease-out touch-none ${
+          open ? 'translate-x-0' : '-translate-x-full'
+        }`}
+      >
+        <div className="flex items-center justify-between gap-2 border-b border-line px-3 py-3">
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-muted">
+            Conversations
+          </h2>
+          <div className="flex items-center gap-1">
+            <kbd
+              className="hidden rounded border border-line bg-inset px-1 py-0.5 text-[10px] font-mono text-muted sm:inline"
+              title="Toggle history (⌘B)"
+            >
+              ⌘B
+            </kbd>
             <button
               type="button"
               onClick={onClose}
@@ -82,45 +95,46 @@ export function Sidebar({
             >
               <CloseIcon />
             </button>
+          </div>
+        </div>
+
+        <div className="px-3 pb-2">
+          <button
+            type="button"
+            onClick={handleNew}
+            className="inline-flex h-9 w-full items-center justify-center gap-1.5 rounded-lg border border-line bg-surface text-sm font-medium text-content transition hover:border-brand-300 hover:bg-inset"
+          >
+            <PlusIcon />
+            New chat
+          </button>
+        </div>
+
+        <div className="scroll-slim h-[calc(100%-7rem)] overflow-y-auto px-2 pb-3">
+          {isLoadingList && sessions.length === 0 ? (
+            <div className="px-2 py-3 text-xs text-muted">Loading…</div>
+          ) : sessions.length === 0 ? (
+            <div className="px-2 py-6 text-center text-xs text-muted">
+              No conversations yet.
+            </div>
+          ) : (
+            <ul className="space-y-0.5">
+              {sessions.map(s => (
+                <SessionRow
+                  key={s.id}
+                  id={s.id}
+                  title={s.title}
+                  lastActiveAt={s.last_active_at}
+                  isActive={s.id === activeId}
+                  onSelect={() => handleSelect(s.id)}
+                  onRename={t => renameSession(s.id, t)}
+                  onDelete={() => deleteSession(s.id)}
+                />
+              ))}
+            </ul>
           )}
         </div>
-      </div>
-
-      <div className="scroll-slim flex-1 overflow-y-auto px-2 py-2">
-        {isLoadingList && sessions.length === 0 ? (
-          <div className="px-2 py-3 text-xs text-muted">Loading…</div>
-        ) : sessions.length === 0 ? (
-          <div className="px-2 py-6 text-center text-xs text-muted">
-            No conversations yet.
-            <br />
-            <button
-              type="button"
-              onClick={handleNew}
-              disabled={disabled}
-              className="mt-2 font-medium text-brand-700 hover:text-brand-800 disabled:opacity-50"
-            >
-              Start your first one
-            </button>
-          </div>
-        ) : (
-          <ul className="space-y-0.5">
-            {sessions.map(s => (
-              <SessionRow
-                key={s.id}
-                id={s.id}
-                title={s.title}
-                lastActiveAt={s.last_active_at}
-                isActive={s.id === activeId}
-                disabled={disabled}
-                onSelect={() => handleSelect(s.id)}
-                onRename={t => renameSession(s.id, t)}
-                onDelete={() => deleteSession(s.id)}
-              />
-            ))}
-          </ul>
-        )}
-      </div>
-    </aside>
+      </aside>
+    </>
   )
 }
 
@@ -129,7 +143,6 @@ function SessionRow({
   title,
   lastActiveAt,
   isActive,
-  disabled,
   onSelect,
   onRename,
   onDelete,
@@ -138,7 +151,6 @@ function SessionRow({
   title: string | null
   lastActiveAt: string
   isActive: boolean
-  disabled: boolean
   onSelect: () => void
   onRename: (title: string) => void | Promise<void>
   onDelete: () => void | Promise<void>
@@ -195,7 +207,7 @@ function SessionRow({
     <li
       className={`group relative rounded-lg ${
         isActive
-          ? 'bg-brand-50 ring-1 ring-brand-200 dark:bg-brand-900/40 dark:ring-brand-700'
+          ? 'bg-active ring-1 ring-active-ring'
           : 'hover:bg-inset'
       }`}
     >
@@ -218,12 +230,13 @@ function SessionRow({
         <button
           type="button"
           onClick={onSelect}
-          disabled={disabled}
-          className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm text-content disabled:cursor-not-allowed disabled:opacity-50"
+          className={`flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm ${
+            isActive ? 'text-active-content' : 'text-content'
+          }`}
         >
           <ChatBubble small active={isActive} />
           <div className="min-w-0 flex-1">
-            <div className="truncate font-medium">
+            <div className={`truncate font-medium ${isActive ? 'text-active-content' : ''}`}>
               {title || 'New chat'}
             </div>
             <div className="truncate text-[11px] text-muted">
