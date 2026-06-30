@@ -1,7 +1,14 @@
+"""get_order_status function — schema-aware.
+
+Look up a single order's status + key dates by order_id. The column
+list and the order/customers join are wired through the active config.
+"""
 import logging
 from db import execute_query
+from schemas.base import SchemaConfig
 
 logger = logging.getLogger(__name__)
+
 
 SCHEMA = {
     "name": "get_order_status",
@@ -19,51 +26,51 @@ SCHEMA = {
 }
 
 
-async def execute(order_id: str) -> dict:
-    """
-    Look up a single order and return its status + key dates.
+def make_get_order_status(cfg: SchemaConfig) -> dict:
+    t_orders = cfg.get_table("orders")
+    t_customers = cfg.get_table("customers")
+    col_order_id = cfg.get_column("order_id")
+    col_status = cfg.get_column("order_status")
+    col_purchase = cfg.get_column("order_purchase_timestamp")
+    col_delivered = cfg.get_column("order_delivered_date")
+    col_estimated = cfg.get_column("order_estimated_delivery_date")
+    col_city = cfg.get_column("customer_city")
+    col_state = cfg.get_column("customer_state")
+    cust_id_col = cfg.get_column("customer_id").column
 
-    Returns:
-        {
-            "order_id": str,
-            "customer_city": str,
-            "customer_state": str,
-            "order_status": str,
-            "order_purchase_timestamp": datetime,
-            "order_estimated_delivery_date": datetime,
-            "order_delivered_customer_date": datetime | None,
-        }
-    """
-    query = """
-    SELECT
-        o.order_id,
-        o.order_status,
-        o.order_purchase_timestamp,
-        o.order_estimated_delivery_date,
-        o.order_delivered_customer_date,
-        c.customer_city,
-        c.customer_state
-    FROM olist_orders_dataset o
-    LEFT JOIN olist_customers_dataset c ON o.customer_id = c.customer_id
-    WHERE o.order_id = $1
-    LIMIT 1
-    """
+    async def execute(order_id: str) -> dict:
+        query = (
+            f"SELECT "
+            f"o.{col_order_id.column}, "
+            f"o.{col_status.column}, "
+            f"o.{col_purchase.column}, "
+            f"o.{col_estimated.column}, "
+            f"o.{col_delivered.column}, "
+            f"c.{col_city.column}, "
+            f"c.{col_state.column} "
+            f"FROM {t_orders} o "
+            f"LEFT JOIN {t_customers} c ON o.{cust_id_col} = c.{cust_id_col} "
+            f"WHERE o.{col_order_id.column} = $1 "
+            f"LIMIT 1"
+        )
 
-    rows = await execute_query(query, order_id)
+        rows = await execute_query(query, order_id)
 
-    if not rows:
+        if not rows:
+            return {
+                "error": f"Order {order_id} not found",
+                "order_id": order_id,
+            }
+
+        row = rows[0]
         return {
-            "error": f"Order {order_id} not found",
-            "order_id": order_id,
+            "order_id": row[col_order_id.column],
+            "customer_city": row[col_city.column],
+            "customer_state": row[col_state.column],
+            "order_status": row[col_status.column],
+            "order_purchase_timestamp": row[col_purchase.column].isoformat() if row[col_purchase.column] else None,
+            "order_estimated_delivery_date": row[col_estimated.column].isoformat() if row[col_estimated.column] else None,
+            "order_delivered_customer_date": row[col_delivered.column].isoformat() if row[col_delivered.column] else None,
         }
 
-    row = rows[0]
-    return {
-        "order_id": row["order_id"],
-        "customer_city": row["customer_city"],
-        "customer_state": row["customer_state"],
-        "order_status": row["order_status"],
-        "order_purchase_timestamp": row["order_purchase_timestamp"].isoformat() if row["order_purchase_timestamp"] else None,
-        "order_estimated_delivery_date": row["order_estimated_delivery_date"].isoformat() if row["order_estimated_delivery_date"] else None,
-        "order_delivered_customer_date": row["order_delivered_customer_date"].isoformat() if row["order_delivered_customer_date"] else None,
-    }
+    return {"schema": SCHEMA, "execute": execute}
