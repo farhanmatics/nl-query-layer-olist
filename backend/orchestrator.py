@@ -6,6 +6,7 @@ from datetime import datetime
 from config import settings
 from cache import translation_cache, translation_key
 from errors import client_error
+from validation.scope import detect_unsupported_concept
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +23,25 @@ async def process_question(question: str):
     """
     try:
         logger.info(f"Starting orchestration for: {question}")
+
+        # Out-of-scope guard: decline concepts the schema can't answer (returns,
+        # refunds, profit, inventory, ...) instead of letting the model map them
+        # onto a proxy and return a confidently wrong number.
+        unsupported = detect_unsupported_concept(question)
+        if unsupported:
+            logger.info(f"Declining unsupported concept: {unsupported['concept']}")
+            return {
+                "error": (
+                    f"This dataset doesn't track {unsupported['concept']}. "
+                    f"{unsupported['suggestion']}"
+                ),
+                "operation": None,
+                "filters": None,
+                "result": None,
+                "formatted_answer": None,
+                "source": None,
+                "cached": False,
+            }
 
         from functions.registry import get_all_schemas
 

@@ -73,13 +73,13 @@ Q: "How many delivered orders did we have in São Paulo last month?"
 ## Architecture
 
 ```
-Web Panel (React)  ←→  Backend (FastAPI)  ←→  Local Model (Ollama + granite4:3b)
+Web Panel (React)  ←→  Backend (FastAPI)  ←→  Local Model (Ollama + qwen3.5:2b)
                               ↓
                         Postgres (read-only role)
 ```
 
 - **Web Panel** — thin chat UI for questions and structured results
-- **Backend Orchestrator** — owns tool definitions, validation, function dispatch, read-only DB connection
+- **Backend Orchestrator** — owns tool definitions, validation, function dispatch, and the read-only DB connection. Also runs the cross-cutting trust layer: a translation cache, a deterministic filter-faithfulness guard, per-request audit logging, and client-facing error sanitization.
 - **Local LLM** — stateless intent translator (question → tool call, rows → formatted answer)
 - **PostgreSQL** — source of truth, reached only via pre-written parameterized queries
 
@@ -118,28 +118,36 @@ The Olist dataset captures 2.5+ years of Brazilian e-commerce data (Sept 2016 �
 
 ## Project Phases
 
-### Phase 0 — Foundation (Current)
+> **Current status:** Phases 0 and 1 are complete and operational. Phase 2 (hardening & trust) is well underway.
+
+### Phase 0 — Foundation ✅
 Prove the vertical slice end-to-end:
 - ✅ Database read-only role
-- ⏳ Backend skeleton (FastAPI, async DB, config)
-- ⏳ Validation layer (cities, dates, enums)
-- ⏳ First two functions: `get_order_status`, `count_orders`
-- ⏳ Orchestrator (LLM tool-calling loop)
-- ⏳ React chat panel
+- ✅ Backend skeleton (FastAPI, async DB, config)
+- ✅ Validation layer (cities, dates, enums)
+- ✅ First two functions: `get_order_status`, `count_orders`
+- ✅ Orchestrator (LLM tool-calling loop)
+- ✅ React chat panel
 
-**Success criteria:** Ask "How many delivered orders in São Paulo last month?" → get exact number + citation.
+**Success criteria met:** "How many delivered orders in São Paulo last month?" → exact number + citation.
 
-### Phase 1 — Core Library + MVP
-- Implement functions 3–6 (revenue, reviews, top products, list orders)
-- Full validation layer with fuzzy city matching
-- Eval set: 50 question/answer pairs with ≥90% pass rate
-- Structured JSON response contract finalized
+### Phase 1 — Core Library + MVP ✅
+- ✅ All six functions implemented (`get_order_status`, `count_orders`, `get_revenue`, `count_low_reviews`, `top_products`, `list_orders`)
+- ✅ Full validation layer with fuzzy city matching
+- ✅ Eval set: 50 question/answer pairs (currently **94%** pass; harness gate at 85%)
+- ✅ Structured JSON response contract finalized
 
-### Phase 2 — Hardening
-- Request logging & observability
-- Result row caps & pagination enforcement
-- Statement timeouts & rate limiting
-- `/api/eval` endpoint for CI integration
+### Phase 2 — Hardening & Trust (in progress)
+- ✅ Per-request audit log (append-only JSONL, row-free result summaries)
+- ✅ Layer 1 translation cache (question → tool call; live DB still queried on hits)
+- ✅ Deterministic filter-faithfulness guard (repairs/blocks dropped filters)
+- ✅ Statement timeouts (`SET statement_timeout` per session)
+- ✅ Result caps & pagination enforcement (`list_orders` ≤ 50, `top_products` ≤ 25)
+- ✅ Client error sanitization (no DB/internal leakage to the client)
+- ✅ Request validation (empty / oversized questions rejected with HTTP 422)
+- ⏳ Rate limiting
+- ⏳ `/api/eval` endpoint for CI integration
+- ⏳ Layer 2 result cache (closed-window-immutable)
 
 ### Phase 3 — Productization
 Extract schema + functions + validation into per-customer **config** so new databases are onboarded by description, not code rewrites.
@@ -313,16 +321,22 @@ Ask a natural-language question.
   "filters": {
     "city": "sao paulo",
     "status": "delivered",
-    "date_range": ["2018-09-17", "2018-10-17"]
+    "date_range": ["2018-07-01T00:00:00", "2018-07-31T23:59:59"]
   },
   "result": {
-    "count": 1423
+    "count": 1059
   },
-  "formatted_answer": "There were 1,423 delivered orders in São Paulo last month.",
+  "formatted_answer": "There were 1,059 orders (city: sao paulo status: delivered ...).",
   "source": "olist_orders_dataset JOIN olist_customers_dataset",
-  "error": null
+  "error": null,
+  "cached": false,
+  "guard": { "repairs": {}, "applied": [], "unresolved": [] }
 }
 ```
+
+- `cached` — `true` when the question→tool translation was served from the Layer 1 cache (the DB is still queried, so the number is always live).
+- `guard` — what the filter-faithfulness guard did: `applied` lists filters it recovered from the question that the model had dropped; `unresolved` lists detected-but-unsafe filters (when non-empty, the request is refused rather than answered with a wrong number).
+- Empty or oversized questions are rejected with **HTTP 422** before reaching the model or DB.
 
 ### `GET /api/health`
 Check backend, database, and LLM connectivity.
@@ -335,6 +349,12 @@ Check backend, database, and LLM connectivity.
   "timestamp": "2026-06-23T..."
 }
 ```
+
+### `GET /api/cache/stats`
+Layer 1 translation-cache stats: `{entries, max_entries, hits, misses, hit_rate, ttl_seconds, enabled}`.
+
+### `POST /api/cache/clear`
+Flush the translation cache (e.g. after manually changing the prompt). Returns `{"cleared": true}`.
 
 ---
 
@@ -362,25 +382,43 @@ Each function is a **pre-written parameterized query**. The LLM only fills typed
 - `backend/migrate.py` — Database migration runner (`status` / `up` / `create-db`)
 - `backend/migrations/` — Ordered, idempotent SQL migrations (schema + role)
 - `backend/` — Python FastAPI application
+  - `orchestrator.py` — tool-calling loop, prompt, caching + guard wiring
+  - `functions/` — the six parameterized query functions + registry
+  - `validation/` — cities, dates, enums, and the filter-faithfulness guard
+  - `cache.py` — Layer 1 LLM-translation cache (TTL + LRU)
+  - `audit.py` — append-only JSONL per-request audit log
+  - `errors.py` — client-facing error sanitization
 - `frontend/` — React + TypeScript chat panel
+- `logs/audit.jsonl` — per-request audit trail (created at runtime)
 - `.env.example` — Environment variable template
 
 ---
 
 ## Testing & Evaluation
 
-### Unit Tests
+### Unit Tests (no LLM required)
+These hit the DB and pure logic directly, bypassing the model:
 ```bash
 cd backend
-pytest tests/test_functions.py -v
+pytest tests/test_functions.py -v          # the six functions against real data
+pytest tests/test_cache.py -v              # translation cache: hit/miss/TTL/LRU
+pytest tests/test_faithfulness.py -v       # filter-guard detection/repair
+pytest tests/test_audit.py -v              # audit record shape + JSONL writing
+pytest tests/test_request_validation.py -v # empty/oversized question rejection
 ```
 
-### Eval Set (50 Q/A pairs)
+### Eval Set (50 Q/A pairs, needs the backend + Ollama running)
 ```bash
+# standalone report (prints per-case PASS/FAIL + pass rate):
+API_URL=http://localhost:8000 ../venv/bin/python tests/test_eval.py
+# or under pytest (skips if backend unreachable, fails below threshold):
 pytest tests/test_eval.py -v
 ```
 
-Target: ≥90% pass rate (questions answered correctly within expected tolerance).
+Current: **94% pass** with `qwen3.5:2b`. The harness gate is **85%** — a realistic
+floor for a 2B dev model (tool selection is near-perfect; the residual gap is
+filter faithfulness on ambiguous phrasings, which a larger model closes). The
+eval's job is to catch regressions below that floor, not to certify the model.
 
 ---
 
@@ -388,10 +426,14 @@ Target: ≥90% pass rate (questions answered correctly within expected tolerance
 
 ✅ **Read-only database role** — no write/DDL possible, enforced by PostgreSQL  
 ✅ **No LLM-authored SQL** — only pre-written, parameterized queries  
-✅ **Statement timeouts** — `SET statement_timeout = '5s'` per connection  
-✅ **Result capping** — >200 rows rejected at the query layer  
-✅ **Citations** — every answer shows what was queried  
-✅ **Validation** — all user inputs (cities, dates, enums) validated before querying  
+✅ **Statement timeouts** — `SET statement_timeout` per session  
+✅ **Result capping** — pagination enforced in SQL (`list_orders` ≤ 50, `top_products` ≤ 25); never thousands of rows into the model  
+✅ **Filter-faithfulness guard** — recovers filters the model dropped, and refuses rather than return a confidently wrong number it can't apply safely  
+✅ **Out-of-scope guard** — declines concepts the schema can't answer (returns, refunds, profit, inventory, …) with an honest "not tracked" message instead of silently substituting a proxy  
+✅ **Citations** — every answer shows what table/filters were queried  
+✅ **Validation** — all user inputs (cities, dates, enums) validated before querying; empty/oversized questions rejected with HTTP 422  
+✅ **Audit log** — one append-only JSONL record per request (question, tool, filters, row-free result summary, timing, guard repairs) for verifiable answers  
+✅ **Error sanitization** — raw DB/internal errors never leak to the client (configurable for dev)  
 
 This is designed for **regulated environments** (finance, health, legal) where data can't leave the building and answers must be auditable.
 
@@ -424,9 +466,9 @@ MIT
 
 - [x] Project brief & architecture (CLAUDE.md)
 - [x] Implementation plan (project_plan.md)
-- [ ] Phase 0: Vertical slice (get_order_status + count_orders)
-- [ ] Phase 1: Full function library + eval set
-- [ ] Phase 2: Hardening (logging, timeouts, row caps)
+- [x] Phase 0: Vertical slice (get_order_status + count_orders)
+- [x] Phase 1: Full function library + eval set
+- [~] Phase 2: Hardening (audit log, cache, faithfulness guard, timeouts, row caps, error sanitization, request validation) — rate limiting & `/api/eval` pending
 - [ ] Phase 3: Schema extraction (config-driven onboarding)
 - [ ] Phase 4: Long tail (SQL escape hatch, multi-step, integrations)
 
