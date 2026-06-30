@@ -1,13 +1,17 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 import logging
+import time
+import uuid
 from typing import Optional
 from datetime import datetime
 from validation.cities import load_known_cities
 
 from config import settings
 from db import get_pool, close_pool, check_db_health
+from audit import audit_logger, build_record
+from errors import client_error
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -24,7 +28,19 @@ app.add_middleware(
 
 
 class QueryRequest(BaseModel):
-    question: str
+    # min_length rejects empty questions; the upper bound is enforced from
+    # settings (configurable) so an oversized request is rejected with HTTP 422
+    # before it ever reaches the model or DB (basic DoS hardening).
+    question: str = Field(..., min_length=1)
+
+    @field_validator("question")
+    @classmethod
+    def _within_max_length(cls, v: str) -> str:
+        if len(v) > settings.max_question_length:
+            raise ValueError(
+                f"question exceeds max length of {settings.max_question_length}"
+            )
+        return v
 
 
 class QueryResponse(BaseModel):
@@ -74,15 +90,23 @@ async def health_check():
 
 @app.post("/api/query", response_model=QueryResponse)
 async def query(request: QueryRequest):
+    request_id = uuid.uuid4().hex
+    start = time.perf_counter()
     try:
         logger.info(f"Processing query: {request.question}")
         from orchestrator import process_question
 
         response_dict = await process_question(request.question)
-        return QueryResponse(**response_dict)
     except Exception as e:
         logger.error(f"Query failed: {e}", exc_info=True)
-        return QueryResponse(error=f"Query processing failed: {str(e)}")
+        response_dict = {"error": client_error(e, "The query could not be processed.")}
+
+    latency_ms = int((time.perf_counter() - start) * 1000)
+    if settings.audit_log_enabled:
+        audit_logger.log(
+            build_record(request_id, request.question, response_dict, latency_ms)
+        )
+    return QueryResponse(**response_dict)
 
 
 @app.get("/api/cache/stats")

@@ -4,6 +4,7 @@ from db import execute_scalar
 from validation.cities import resolve_city
 from validation.dates import parse_date_range
 from config import settings
+from errors import client_error
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +112,6 @@ async def execute(
     except Exception as e:
         logger.error(f"Query failed: {e}")
         return {
-            "error": f"Database query failed: {str(e)}",
+            "error": client_error(e, "A database error occurred while running your query."),
             "filters": filters,
         }

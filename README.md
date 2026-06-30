@@ -6,6 +6,36 @@ A **self-hosted, trustworthy natural-language query system** that lets non-techn
 
 ---
 
+## Table of Contents
+
+- [The Problem](#the-problem)
+- [The Solution](#the-solution)
+- [Core Principles (Non-Negotiable)](#core-principles-non-negotiable)
+- [Architecture](#architecture)
+- [Tech Stack](#tech-stack)
+- [Database Schema (Olist)](#database-schema-olist)
+- [Project Phases](#project-phases)
+- [Getting Started](#getting-started)
+  - [TL;DR — Run the whole thing](#tldr--run-the-whole-thing)
+  - [Prerequisites](#prerequisites)
+  - [1. Clone & Setup Backend](#1-clone--setup-backend)
+  - [2. Set Up the Database (Migrations)](#2-set-up-the-database-migrations)
+  - [3. Start Ollama](#3-start-ollama)
+  - [4. Start Backend](#4-start-backend)
+  - [5. Setup & Start Frontend](#5-setup--start-frontend)
+  - [6. Test](#6-test)
+- [API Endpoints](#api-endpoints)
+- [Function Library](#function-library)
+- [Project Files](#project-files)
+- [Testing & Evaluation](#testing--evaluation)
+- [Security & Trust](#security--trust)
+- [Contributing](#contributing)
+- [License](#license)
+- [Questions?](#questions)
+- [Roadmap](#roadmap)
+
+---
+
 ## The Problem
 
 Most organizations have critical operational data locked in databases that only analysts can access. Business users hit analysts with ad-hoc questions, creating bottlenecks. BI dashboards don't cover every question. And sending data to cloud LLM APIs raises compliance concerns.

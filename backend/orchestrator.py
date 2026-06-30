@@ -5,6 +5,7 @@ import httpx
 from datetime import datetime
 from config import settings
 from cache import translation_cache, translation_key
+from errors import client_error
 
 logger = logging.getLogger(__name__)
 
@@ -114,7 +115,7 @@ async def process_question(question: str):
     except Exception as e:
         logger.error(f"Orchestration failed: {e}", exc_info=True)
         return {
-            "error": str(e),
+            "error": client_error(e, "The query could not be processed."),
             "operation": None,
             "filters": None,
             "result": None,
@@ -342,10 +343,10 @@ async def dispatch_function(tool_name: str, args: dict) -> dict:
         return {"error": f"Unknown tool: {tool_name}"}
     except TypeError as e:
         logger.error(f"Invalid arguments for {tool_name}: {e}")
-        return {"error": f"Invalid arguments: {str(e)}"}
+        return {"error": client_error(e, "The request could not be processed with the given arguments.")}
     except Exception as e:
         logger.error(f"Function execution failed: {e}", exc_info=True)
-        return {"error": f"Function failed: {str(e)}"}
+        return {"error": client_error(e, "The query could not be completed.")}
 
 
 async def format_answer(tool_name: str, result: dict) -> str:
