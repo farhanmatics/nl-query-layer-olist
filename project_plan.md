@@ -14,9 +14,12 @@ Stack: Python + FastAPI · PostgreSQL (read-only role) · Ollama + qwen3.5:2b ·
 basic-analysis/
 ├── backend/
 │   ├── main.py                  # FastAPI app entrypoint
-│   ├── config.py                # Settings (DB URL, Ollama URL, REFERENCE_DATE)
+│   ├── config.py                # Settings (DB URL, Ollama URL, SCHEMA_NAME, ...)
 │   ├── db.py                    # Read-only async DB connection (asyncpg)
 │   ├── orchestrator.py          # Tool-calling loop: question → LLM → validated call → answer
+│   ├── appdb.py                 # Read-write app-state DB (users, auth_sessions, chat sessions)
+│   ├── auth.py / auth_routes.py / auth_rate_limit.py
+│   ├── session_routes.py        # B3: chat session CRUD (IDOR-safe)
 │   ├── functions/
 │   │   ├── __init__.py
 │   │   ├── registry.py          # Maps tool names → handler functions + JSON schemas
@@ -26,26 +29,47 @@ basic-analysis/
 │   │   ├── count_low_reviews.py
 │   │   ├── top_products.py
 │   │   └── list_orders.py
+│   ├── schemas/                 # Phase 3: per-schema config
+│   │   ├── __init__.py          # Loader, registry, SCHEMA_NAME env var
+│   │   ├── base.py              # SchemaConfig, ColumnRef, ScopePattern, PromptConfig
+│   │   ├── olist/config.py      # Default (Olist Brazilian e-commerce)
+│   │   └── shopify/config.py    # Stub (proves the abstraction generalizes)
 │   ├── validation/
 │   │   ├── __init__.py
-│   │   ├── cities.py            # Known-city set loader + normalization
-│   │   ├── dates.py             # Token → concrete timestamp range (anchored to REFERENCE_DATE)
-│   │   └── enums.py             # order_status, payment_type allowed values
-│   └── tests/
-│       ├── test_functions.py    # Unit tests per function (real DB)
-│       └── eval_set.json        # ~50-100 question → expected result pairs
+│   │   ├── cities.py            # Schema-aware known-city loader
+│   │   ├── categories.py        # Schema-aware known-category loader
+│   │   ├── dates.py             # Token → concrete timestamp range
+│   │   ├── enums.py             # Schema-aware enum validators
+│   │   ├── scope.py             # Schema-aware out-of-scope guard
+│   │   ├── detectors.py         # Shared detector set (state/city/date/status/category)
+│   │   └── faithfulness.py      # Filter-faithfulness guard
+│   ├── resolver.py              # B0 conversational resolution
+│   ├── cache.py                 # Layer 1 translation cache
+│   ├── audit.py                 # B2 per-request audit log
+│   └── tests/                   # test_*.py
 ├── frontend/
 │   ├── src/
 │   │   ├── App.tsx
+│   │   ├── pages/               # LoginPage, RegisterPage, ChatPage
+│   │   ├── auth/                # AuthContext, ProtectedRoute
+│   │   ├── session/             # SessionContext (F1)
+│   │   ├── theme/               # ThemeContext (F-T theming)
 │   │   ├── components/
-│   │   │   ├── ChatPanel.tsx    # Message list
+│   │   │   ├── ChatPanel.tsx
 │   │   │   ├── MessageBubble.tsx
-│   │   │   └── ResultCard.tsx   # Renders structured result (number/table/card)
-│   │   └── api.ts               # fetch wrapper → POST /api/query
+│   │   │   ├── ResultCard.tsx
+│   │   │   ├── Sidebar.tsx      # F1
+│   │   │   ├── AuthCard.tsx
+│   │   │   ├── AccountMenu.tsx
+│   │   │   ├── ThemeToggle.tsx
+│   │   │   ├── CarryoverChip.tsx
+│   │   │   └── ClarifyPrompt.tsx
+│   │   └── api.ts               # fetch wrapper (credentials, CSRF, 401)
 │   └── package.json
 ├── sql/
 │   ├── olist_tables_structure.sql  # existing schema
 │   └── readonly_role.sql           # CREATE ROLE + GRANT statements
+├── migrations_app/             # App-state DB migrations (users, auth_sessions, ...)
 ├── .env.example
 └── docker-compose.yml           # optional: postgres + ollama for fresh-machine setup
 ```
@@ -270,6 +294,21 @@ After Phase 0 proves the vertical slice (functions 1+2), implement:
 - Result row cap: any query returning >200 rows is rejected at the query layer — the function must aggregate or paginate ✅ (`db.py` — `RowCapExceeded` exception, configurable via `MAX_RESULT_ROWS`)
 - Add `/api/eval` endpoint: runs eval_set.json and returns pass/fail counts (for CI) ✅ (`main.py` — returns structured JSON with pass rate and threshold check)
 - Rate limiting: simple in-memory sliding-window limiter per IP ✅ (`main.py` — configurable via `RATE_LIMIT_PER_MINUTE`)
+
+## Phase 3 — Productization ✅
+
+Schema-agnostic onboarding via per-schema config. The active schema is
+selected at startup via the `SCHEMA_NAME` env var (default: `olist`).
+Each schema is a self-contained module under `backend/schemas/<name>/`
+with a `SchemaConfig` dataclass: tables, columns, enums, state codes,
+out-of-scope lexicon, prompt text + few-shots, and source citations.
+The function library, validation layer, and orchestrator's system
+prompt all read from the active config — no per-schema code paths.
+- `SCHEMA_NAME=olist` — default; runs against the Olist Brazilian e-commerce dataset
+- `SCHEMA_NAME=shopify` — config-only stub that proves the abstraction generalizes (its functions return a "not wired" error until a real Shopify adapter lands)
+- Adding a new schema = one config module + one entry in `schemas/__init__.py::_BUILTIN`
+- The `tests/test_schemas.py` suite pins the SchemaConfig contract so future schemas follow it
+- Resolves the original Phase 3 open question ("How much per-schema config?") — the answer is one dataclass
 
 ---
 

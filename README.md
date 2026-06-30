@@ -93,7 +93,7 @@ Web Panel (React)  ←→  Backend (FastAPI)  ←→  Local Model (Ollama + qwen
 | **Frontend** | React + TypeScript · Vite · TailwindCSS |
 | **LLM** | Ollama · qwen3.5:2b (2B params, excellent tool-calling, CPU-friendly) |
 | **Database** | PostgreSQL (read-only role) |
-| **Deployment** | Local dev (Mac/Linux) · VPS ready (Phase 3) |
+| **Deployment** | Local dev (Mac/Linux) · VPS ready · schema-agnostic via `SCHEMA_NAME` |
 
 ---
 
@@ -149,8 +149,20 @@ Prove the vertical slice end-to-end:
 - ✅ `/api/eval` endpoint for CI integration (returns pass rate + threshold check)
 - ✅ Global row cap (queries returning >200 rows rejected via `RowCapExceeded`)
 
-### Phase 3 — Productization
-Extract schema + functions + validation into per-customer **config** so new databases are onboarded by description, not code rewrites.
+### Phase 3 — Productization ✅
+Schema-agnostic onboarding via per-schema config. The active schema is
+selected at startup via the `SCHEMA_NAME` env var (default: `olist`).
+Each schema is a self-contained module under `backend/schemas/<name>/`
+with a `SchemaConfig` dataclass: tables, columns, enums, state codes,
+out-of-scope lexicon, prompt text + few-shots, and source citations.
+The function library, validation layer, and orchestrator's system
+prompt all read from the active config — no per-schema code paths.
+- `SCHEMA_NAME=olist` — default; runs against the Olist Brazilian e-commerce dataset
+- `SCHEMA_NAME=shopify` — config-only stub that proves the abstraction
+  generalizes (its functions return a "not wired" error until a real
+  Shopify adapter lands)
+- Adding a new schema = one config module + one entry in
+  `schemas/__init__.py::_BUILTIN`
 
 ### Phase 4 — Long Tail (Optional)
 - Fenced generated-SQL escape hatch (read-only role, LIMIT enforced)
@@ -461,8 +473,17 @@ eval's job is to catch regressions below that floor, not to certify the model.
 ✅ **Validation** — all user inputs (cities, dates, enums) validated before querying; empty/oversized questions rejected with HTTP 422  
 ✅ **Audit log** — one append-only JSONL record per request (question, tool, filters, row-free result summary, timing, guard repairs) for verifiable answers  
 ✅ **Error sanitization** — raw DB/internal errors never leak to the client (configurable for dev)  
+✅ **Authentication** — argon2id password hashing (off the event loop), signed httpOnly session cookies, CSRF double-submit, per-(email, IP) throttling on login **and** register, uniform login errors (no user enumeration), and a production boot guard that refuses to start with a default `SESSION_SECRET` or `COOKIE_SECURE=false`  
+✅ **Multi-tenant isolation (IDOR-safe)** — every session/message route enforces ownership and returns **404** (not 403) on cross-user or unknown ids; `/api/query` re-checks session ownership before persisting; `ON DELETE CASCADE` wipes a user's sessions and messages  
 
 This is designed for **regulated environments** (finance, health, legal) where data can't leave the building and answers must be auditable.
+
+### Accepted risks (single-tenant / local deployment)
+
+The current target is **one self-hosted instance per customer**. Under that model the following are accepted, and should be revisited before any **multi-user-per-customer** or **public** deployment:
+
+- **`/api/eval` and `/api/cache/clear` are available to any authenticated user.** `/api/eval` runs the full eval set (~100 LLM calls/request) and `/api/cache/clear` flushes the shared translation cache. There is no role/admin tier yet (the `role` column is reserved). For multi-user, gate these behind an admin role or disable them in production.
+- **Anonymous `/api/query` accepts a client-supplied `session_id`** keyed to a process-global, TTL-bounded in-memory context store (F2-early back-compat). It never reads or writes another user's **durable** history (that requires auth + ownership), but a guessed `session_id` could pollute or evict ephemeral context. For multi-user, require authentication whenever `session_id` is present.
 
 ---
 
