@@ -265,10 +265,11 @@ After Phase 0 proves the vertical slice (functions 1+2), implement:
 
 ## Phase 2 — Hardening
 
-- Statement timeout `SET statement_timeout = '5s'` per connection (already planned in db.py)
-- Request logging middleware: log question, resolved function, execution time, row count
-- Result row cap: any query returning >200 rows is rejected at the query layer — the function must aggregate or paginate
-- Add `/api/eval` endpoint: runs eval_set.json and returns pass/fail counts (for CI)
+- Statement timeout `SET statement_timeout = '5s'` per connection (already planned in db.py) ✅
+- Request logging middleware: log question, resolved function, execution time, row count ✅ (`audit.py` — JSONL, PII-safe summaries)
+- Result row cap: any query returning >200 rows is rejected at the query layer — the function must aggregate or paginate ✅ (`db.py` — `RowCapExceeded` exception, configurable via `MAX_RESULT_ROWS`)
+- Add `/api/eval` endpoint: runs eval_set.json and returns pass/fail counts (for CI) ✅ (`main.py` — returns structured JSON with pass rate and threshold check)
+- Rate limiting: simple in-memory sliding-window limiter per IP ✅ (`main.py` — configurable via `RATE_LIMIT_PER_MINUTE`)
 
 ---
 

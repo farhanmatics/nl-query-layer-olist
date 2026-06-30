@@ -118,7 +118,7 @@ The Olist dataset captures 2.5+ years of Brazilian e-commerce data (Sept 2016 �
 
 ## Project Phases
 
-> **Current status:** Phases 0 and 1 are complete and operational. Phase 2 (hardening & trust) is well underway.
+> **Current status:** Phases 0, 1, and 2 are complete and operational.
 
 ### Phase 0 — Foundation ✅
 Prove the vertical slice end-to-end:
@@ -137,7 +137,7 @@ Prove the vertical slice end-to-end:
 - ✅ Eval set: 50 question/answer pairs (currently **94%** pass; harness gate at 85%)
 - ✅ Structured JSON response contract finalized
 
-### Phase 2 — Hardening & Trust (in progress)
+### Phase 2 — Hardening & Trust ✅
 - ✅ Per-request audit log (append-only JSONL, row-free result summaries)
 - ✅ Layer 1 translation cache (question → tool call; live DB still queried on hits)
 - ✅ Deterministic filter-faithfulness guard (repairs/blocks dropped filters)
@@ -145,9 +145,9 @@ Prove the vertical slice end-to-end:
 - ✅ Result caps & pagination enforcement (`list_orders` ≤ 50, `top_products` ≤ 25)
 - ✅ Client error sanitization (no DB/internal leakage to the client)
 - ✅ Request validation (empty / oversized questions rejected with HTTP 422)
-- ⏳ Rate limiting
-- ⏳ `/api/eval` endpoint for CI integration
-- ⏳ Layer 2 result cache (closed-window-immutable)
+- ✅ Rate limiting (sliding-window per IP, configurable via `RATE_LIMIT_PER_MINUTE`)
+- ✅ `/api/eval` endpoint for CI integration (returns pass rate + threshold check)
+- ✅ Global row cap (queries returning >200 rows rejected via `RowCapExceeded`)
 
 ### Phase 3 — Productization
 Extract schema + functions + validation into per-customer **config** so new databases are onboarded by description, not code rewrites.
@@ -356,6 +356,33 @@ Layer 1 translation-cache stats: `{entries, max_entries, hits, misses, hit_rate,
 ### `POST /api/cache/clear`
 Flush the translation cache (e.g. after manually changing the prompt). Returns `{"cleared": true}`.
 
+### `POST /api/eval`
+Run the eval set (50 test cases) and return pass/fail results for CI integration.
+
+**Response:**
+```json
+{
+  "total": 50,
+  "passed": 47,
+  "failed": 3,
+  "pass_rate": 0.94,
+  "threshold": 0.85,
+  "threshold_met": true,
+  "results": [
+    {"id": "e01", "question": "...", "passed": true, "reason": "ok", ...},
+    ...
+  ]
+}
+```
+
+CI can check `threshold_met` to decide whether to fail the build.
+
+### Rate Limiting
+All `/api/*` endpoints are rate-limited to **30 requests/minute per IP** (configurable via `RATE_LIMIT_PER_MINUTE`). Exceeding the limit returns **HTTP 429**:
+```json
+{"error": "Rate limit exceeded (30 requests/minute)"}
+```
+
 ---
 
 ## Function Library
@@ -468,7 +495,7 @@ MIT
 - [x] Implementation plan (project_plan.md)
 - [x] Phase 0: Vertical slice (get_order_status + count_orders)
 - [x] Phase 1: Full function library + eval set
-- [~] Phase 2: Hardening (audit log, cache, faithfulness guard, timeouts, row caps, error sanitization, request validation) — rate limiting & `/api/eval` pending
+- [x] Phase 2: Hardening (audit log, cache, faithfulness guard, timeouts, row caps, rate limiting, error sanitization, request validation, `/api/eval`)
 - [ ] Phase 3: Schema extraction (config-driven onboarding)
 - [ ] Phase 4: Long tail (SQL escape hatch, multi-step, integrations)
 

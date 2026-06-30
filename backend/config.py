@@ -40,6 +40,16 @@ class Settings(BaseSettings):
     # Hardening: bound request size to reject oversized questions (basic DoS).
     max_question_length: int = 2000
 
+    # Hardening: global row cap — any query returning more than this is rejected
+    # at the query layer. Functions that legitimately return many rows (list_orders,
+    # top_products) already paginate/limit below this threshold.
+    max_result_rows: int = 200
+
+    # Hardening: simple in-memory rate limiter (requests per minute per IP).
+    # Set to 0 to disable. Not a replacement for a real reverse-proxy limiter
+    # in production, but sufficient for single-tenant local/VPS deployments.
+    rate_limit_per_minute: int = 30
+
     class Config:
         env_file = ".env"
         case_sensitive = False
