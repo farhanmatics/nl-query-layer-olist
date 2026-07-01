@@ -28,7 +28,8 @@ export function ChatPage() {
   const {
     activeId,
     messages: storedMessages,
-    appendTurn,
+    appendUserMessage,
+    appendAssistantResponse,
     newSession,
     drawerOpen,
     openDrawer,
@@ -104,8 +105,9 @@ export function ChatPage() {
         const created = await newSession(deriveTitle(text))
         sid = created.id
       }
+      appendUserMessage(text)
       const response = await query(text, sid, { signal: controller.signal })
-      appendTurn(text, response)
+      appendAssistantResponse(response)
     } catch (error) {
       if (error instanceof AbortError) {
         const cancelled: QueryResponse = {
@@ -117,7 +119,7 @@ export function ChatPage() {
           error: 'Cancelled.',
           context: null,
         }
-        appendTurn(text, cancelled)
+        appendAssistantResponse(cancelled)
         return
       }
       // Network / server failure: surface a clear error AND remember
@@ -133,7 +135,7 @@ export function ChatPage() {
         }`,
         context: null,
       }
-      appendTurn(text, fallback)
+      appendAssistantResponse(fallback)
       setFailedText(text)
     } finally {
       abortRef.current = null

@@ -52,11 +52,12 @@ interface SessionContextValue {
   renameSession: (id: string, title: string) => Promise<void>
   deleteSession: (id: string) => Promise<void>
   /**
-   * Append a (user question, assistant response) pair to the in-memory
-   * transcript. Called by ChatPage after a successful /api/query so the
-   * UI updates without re-fetching from the server.
+   * Append the user's question to the in-memory transcript immediately
+   * (optimistic UI). The assistant reply is added separately via
+   * appendAssistantResponse once /api/query returns.
    */
-  appendTurn: (question: string, response: import('../api').QueryResponse) => void
+  appendUserMessage: (question: string) => void
+  appendAssistantResponse: (response: import('../api').QueryResponse) => void
 }
 
 const SessionContext = createContext<SessionContextValue | null>(null)
@@ -71,7 +72,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [drawerOpen, setDrawerOpen] = useState(false)
   // A freshly created session has no server-side messages yet. Skip the
   // load for it once, so the message-load effect can't clobber an optimistic
-  // appendTurn with an empty list (a race when create + send happen together).
+  // append with an empty list (a race when create + send happen together).
   const skipLoadFor = useRef<string | null>(null)
 
   // Load the session list on mount (authed only). Re-load when the user
@@ -172,8 +173,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }
   }, [activeId, sessions])
 
-  const appendTurn = useCallback(
-    (question: string, response: import('../api').QueryResponse) => {
+  const appendUserMessage = useCallback(
+    (question: string) => {
       const now = new Date().toISOString()
       setMessages(prev => [
         ...prev,
@@ -184,6 +185,24 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           response: null,
           created_at: now,
         },
+      ])
+      setSessions(prev => {
+        if (!activeId) return prev
+        return prev.map(s =>
+          s.id === activeId
+            ? { ...s, last_active_at: now, title: s.title ?? deriveTitle(question) }
+            : s,
+        )
+      })
+    },
+    [activeId],
+  )
+
+  const appendAssistantResponse = useCallback(
+    (response: import('../api').QueryResponse) => {
+      const now = new Date().toISOString()
+      setMessages(prev => [
+        ...prev,
         {
           id: `local-${crypto.randomUUID()}`,
           role: 'assistant',
@@ -192,15 +211,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           created_at: now,
         },
       ])
-      // Bump last_active_at client-side and, if this is the first message of
-      // an untitled ("New chat") session, mirror the backend's auto-title so
-      // the sidebar updates immediately without a refetch.
       setSessions(prev => {
         if (!activeId) return prev
         return prev.map(s =>
-          s.id === activeId
-            ? { ...s, last_active_at: now, title: s.title ?? deriveTitle(question) }
-            : s,
+          s.id === activeId ? { ...s, last_active_at: now } : s,
         )
       })
     },
@@ -221,7 +235,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       selectSession,
       renameSession,
       deleteSession,
-      appendTurn,
+      appendUserMessage,
+      appendAssistantResponse,
     }),
     [
       sessions,
@@ -234,7 +249,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       selectSession,
       renameSession,
       deleteSession,
-      appendTurn,
+      appendUserMessage,
+      appendAssistantResponse,
     ],
   )
 
