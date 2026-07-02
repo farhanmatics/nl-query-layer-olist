@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     dashscope_api_key: str = ""
     dashscope_base_url: str = "https://dashscope-intl.aliyuncs.com/api/v1"
     dashscope_model: str = "qwen3.7-plus"
+    # Fine-tuned model ID from DashScope Model Studio (set after SFT job completes).
+    dashscope_finetune_model: str = ""
+    use_finetuned_model: bool = False
     # Thinking mode is incompatible with JSON structured output for tool calls.
     dashscope_enable_thinking: bool = False
     llm_timeout_seconds: int = 30
@@ -116,6 +119,10 @@ class Settings(BaseSettings):
     sql_escape_enabled: bool = False
     sql_escape_max_limit: int = 100
 
+    # Multi-step planner: LLM emits mode=single|chain with up to planner_max_steps.
+    planner_enabled: bool = False
+    planner_max_steps: int = 3
+
     class Config:
         env_file = str(_ENV_FILE)
         case_sensitive = False
@@ -131,6 +138,13 @@ class Settings(BaseSettings):
     @property
     def reference_datetime(self) -> datetime:
         return datetime.strptime(self.reference_date, "%Y-%m-%d")
+
+    @property
+    def active_llm_model(self) -> str:
+        """Base or fine-tuned DashScope model ID for inference."""
+        if self.use_finetuned_model and self.dashscope_finetune_model.strip():
+            return self.dashscope_finetune_model.strip()
+        return self.dashscope_model
 
 
 settings = Settings()

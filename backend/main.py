@@ -133,8 +133,11 @@ class QueryResponse(BaseModel):
 class HealthResponse(BaseModel):
     db: str
     llm: str
+    llm_model: str = ""
     meta_tools: str = "disabled"
     sql_escape: str = "disabled"
+    planner: str = "disabled"
+    finetuned: str = "disabled"
     timestamp: str
 
 
@@ -261,8 +264,11 @@ async def health_check():
     return HealthResponse(
         db="ok" if db_healthy else "error",
         llm="ok" if llm_healthy else "error",
+        llm_model=settings.active_llm_model,
         meta_tools="enabled" if settings.meta_tools_enabled else "disabled",
         sql_escape="enabled" if settings.sql_escape_enabled else "disabled",
+        planner="enabled" if settings.planner_enabled else "disabled",
+        finetuned="enabled" if settings.use_finetuned_model else "disabled",
         timestamp=datetime.utcnow().isoformat(),
     )
 

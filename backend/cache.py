@@ -108,7 +108,7 @@ def translation_key(
     tool call from one model must never be served for another.
     """
     if model is None:
-        model = settings.dashscope_model
+        model = settings.active_llm_model
     h = hashlib.sha256()
     h.update(model.encode("utf-8"))
     h.update(b"\x00")

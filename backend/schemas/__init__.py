@@ -13,9 +13,11 @@ Tests that need an isolated config can use `set_active_config(...)`
 to inject a different one (and reset to None when done).
 """
 import importlib
+import json
 import logging
 import os
 import threading
+from pathlib import Path
 from typing import Optional
 
 from schemas.base import SchemaConfig
@@ -43,6 +45,20 @@ _BUILTIN = {
 
 _lock = threading.Lock()
 _active: Optional[SchemaConfig] = None
+
+
+def get_schema_pack_path(name: Optional[str] = None) -> Path:
+    """Path to per-schema pack.json (SFT paths, model IDs)."""
+    schema = (name or os.environ.get("SCHEMA_NAME") or _settings_schema_default() or "olist").strip().lower()
+    return Path(__file__).resolve().parent / schema / "pack.json"
+
+
+def load_schema_pack(name: Optional[str] = None) -> dict:
+    """Load schema pack metadata (SFT dataset paths, fine-tune model ID)."""
+    path = get_schema_pack_path(name)
+    if not path.exists():
+        return {}
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def get_active_config() -> SchemaConfig:

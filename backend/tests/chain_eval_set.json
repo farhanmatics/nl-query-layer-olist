@@ -1,0 +1,57 @@
+{
+  "description": "Offline planner eval: multi-step plans with $stepN bindings. No LLM — tests chain_executor + meta_router resolution.",
+  "cases": [
+    {
+      "id": "c01",
+      "question": "Top category by revenue last year, then best product in that category",
+      "expected_plan": {
+        "mode": "chain",
+        "steps": [
+          {
+            "kind": "meta",
+            "tool": "rank",
+            "args": {
+              "entity": "categories",
+              "by": "revenue",
+              "limit": 1,
+              "date_token": "last_year"
+            }
+          },
+          {
+            "kind": "meta",
+            "tool": "rank",
+            "args": {
+              "entity": "products",
+              "category": "$step0.category",
+              "by": "revenue",
+              "limit": 1,
+              "date_token": "last_year"
+            }
+          }
+        ]
+      },
+      "expected_final_operation": "top_products",
+      "binding_field": "category"
+    },
+    {
+      "id": "c02",
+      "question": "How many delivered orders in Sao Paulo last month?",
+      "expected_plan": {
+        "mode": "single",
+        "steps": [
+          {
+            "kind": "meta",
+            "tool": "count",
+            "args": {
+              "entity": "orders",
+              "city": "sao paulo",
+              "status": "delivered",
+              "date_token": "last_month"
+            }
+          }
+        ]
+      },
+      "expected_final_operation": "count_orders"
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "schema_name": "olist",
+  "display_name": "Olist Brazilian E-Commerce",
+  "base_model": "qwen3.7-plus",
+  "finetune_model_env": "DASHSCOPE_FINETUNE_MODEL",
+  "finetune_model_id": null,
+  "sft_train": "datasets/olist_sft_train.jsonl",
+  "sft_val": "datasets/olist_sft_val.jsonl",
+  "eval_sets": [
+    "backend/tests/eval_set.json",
+    "backend/tests/meta_eval_set.json",
+    "backend/tests/chain_eval_set.json"
+  ],
+  "notes": "Set finetune_model_id after DashScope SFT job completes; enable USE_FINETUNED_MODEL=true for A/B."
+}

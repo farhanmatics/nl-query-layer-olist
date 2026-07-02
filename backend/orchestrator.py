@@ -132,11 +132,16 @@ async def process_question(
         from functions.registry import get_all_schemas
 
         use_meta = settings.meta_tools_enabled
+        use_planner = settings.planner_enabled and use_meta
         if use_meta:
             from meta_schemas import get_meta_tool_schemas
 
             tool_schemas = get_meta_tool_schemas()
             system_prompt = build_meta_system_prompt(tool_schemas)
+            if use_planner:
+                from planner_schemas import build_planner_system_prompt
+
+                system_prompt = build_planner_system_prompt(system_prompt)
         else:
             tool_schemas = get_all_schemas()
             system_prompt = build_system_prompt(tool_schemas)
@@ -154,6 +159,24 @@ async def process_question(
         else:
             from_cache = False
             tool_call = await call_llm_for_tool(question, system_prompt)
+            if use_planner and isinstance(tool_call, dict) and "error" not in tool_call:
+                from planner_schemas import normalize_plan
+
+                plan = normalize_plan(tool_call)
+                if plan.get("error"):
+                    tool_call = plan
+                elif len(plan.get("steps") or []) > 1 or plan.get("mode") == "chain":
+                    chain_response = await _execute_chain_plan(
+                        question, plan, from_cache=from_cache, durable=durable,
+                        session_id=session_id, user_id=user_id,
+                    )
+                    return chain_response
+                else:
+                    step = (plan.get("steps") or [{}])[0]
+                    tool_call = {
+                        "tool": step.get("tool"),
+                        "args": dict(step.get("args") or {}),
+                    }
             # Only cache a clean, usable tool call — never a transient error.
             if (
                 settings.llm_cache_enabled
@@ -547,6 +570,69 @@ def _extract_json(content: str) -> dict:
         if start != -1 and end != -1 and end > start:
             return json.loads(text[start : end + 1])
         raise
+
+
+async def _execute_chain_plan(
+    question: str,
+    plan: dict,
+    *,
+    from_cache: bool,
+    durable: bool,
+    session_id: Optional[str],
+    user_id: Optional[str],
+) -> dict:
+    """Run a multi-step planner chain and return a formatted response."""
+    from chain_executor import execute_plan
+    from meta_router import measure_for_tool, resolve_meta_call
+
+    out = await execute_plan(
+        plan,
+        question=question,
+        resolve_meta_call=resolve_meta_call,
+        dispatch_function=dispatch_function,
+        apply_filter_guard=apply_filter_guard,
+    )
+    if out.get("error"):
+        response = {
+            "error": out["error"],
+            "operation": out.get("operation"),
+            "filters": out.get("filters"),
+            "result": None,
+            "formatted_answer": None,
+            "source": None,
+            "cached": from_cache,
+            "context": _empty_context(),
+            "plan": plan,
+        }
+        if durable and session_id:
+            await _persist_turn(session_id, user_id, question, response)
+        return response
+
+    final_op = out["final_operation"]
+    final_result = dict(out["final_result"] or {})
+    final_filters = out.get("final_filters") or {}
+    formatted_answer = await format_answer(
+        question, final_op, final_filters, {**final_result, "filters": final_filters}
+    )
+    measure_meta = measure_for_tool(final_op) if final_op else None
+    response = {
+        "operation": final_op,
+        "meta_operation": "chain",
+        "filters": final_filters,
+        "result": final_result,
+        "formatted_answer": formatted_answer,
+        "source": get_source_citation(final_op) if final_op else None,
+        "error": None,
+        "cached": from_cache,
+        "context": {**_empty_context(), "plan_mode": plan.get("mode"), "steps": len(out.get("steps") or [])},
+        "plan": plan,
+        "chain": out.get("steps"),
+    }
+    if measure_meta:
+        response["measure"] = measure_meta
+    if durable and session_id:
+        await _persist_turn(session_id, user_id, question, response)
+    return response
 
 
 async def call_llm_for_tool(question: str, system_prompt: str) -> dict:

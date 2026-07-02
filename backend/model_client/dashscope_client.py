@@ -88,7 +88,7 @@ def _sync_call(
 
     kwargs: dict[str, Any] = {
         "api_key": settings.dashscope_api_key,
-        "model": settings.dashscope_model,
+        "model": settings.active_llm_model,
         "messages": _text_messages(system, user),
         "result_format": "message",
         "temperature": temperature,
