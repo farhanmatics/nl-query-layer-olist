@@ -518,7 +518,7 @@ For architecture deep-dives, see `CLAUDE.md` and `project_plan.md`.
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).
 
 ---
 
