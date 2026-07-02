@@ -47,6 +47,7 @@ from validation.detectors import (
     starts_with_followup_connector,
     contains_measure_noun,
     contains_reset_word,
+    contains_deixis_reference,
     contains_any_filter_token,
     get_known_cities,
     get_known_categories,
@@ -134,6 +135,11 @@ def classify_turn(
     # signal regardless of measure noun — "overall revenue" inherits the
     # prior op and drops the prior filters.
     if has_reset:
+        return "FOLLOW_UP"
+
+    # Deixis + filter or measure noun: "about those orders, how many canceled?"
+    # inherits context — "orders" here is referential, not a fresh topic.
+    if contains_deixis_reference(q) and (has_filter or has_measure):
         return "FOLLOW_UP"
 
     # Connector + filter + no measure noun → classic follow-up.

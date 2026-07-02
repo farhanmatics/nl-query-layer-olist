@@ -139,6 +139,8 @@ def build_record(
         "latency_ms": latency_ms,
         "user_id": user_id,
         "session_id": session_id,
+        "llm_provider": "dashscope",
+        "llm_model": settings.dashscope_model,
     }
 
 

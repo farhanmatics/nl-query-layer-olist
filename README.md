@@ -20,7 +20,7 @@ A **self-hosted, trustworthy natural-language query system** that lets non-techn
   - [Prerequisites](#prerequisites)
   - [1. Clone & Setup Backend](#1-clone--setup-backend)
   - [2. Set Up the Database (Migrations)](#2-set-up-the-database-migrations)
-  - [3. Start Ollama](#3-start-ollama)
+  - [3. Configure DashScope](#3-configure-dashscope)
   - [4. Start Backend](#4-start-backend)
   - [5. Setup & Start Frontend](#5-setup--start-frontend)
   - [6. Test](#6-test)
@@ -42,11 +42,13 @@ Most organizations have critical operational data locked in databases that only 
 
 ## The Solution
 
-A **local, read-only query layer** that:
+A **read-only query layer** that:
 - Translates plain-English questions into typed function calls (not SQL)
 - Executes pre-written, parameterized database queries (no model-generated SQL)
 - Returns structured, verifiable answers with citations
-- Keeps data on-prem and never sends it to an external API
+- Keeps the **database on your server** — the model never connects to Postgres; only the backend does
+
+On the **`fa/cloud-dev` branch**, inference runs on **Alibaba DashScope** (`qwen3.7-plus`) for real-time answers (~2–5s/query). Question text and aggregated results (counts, sums) are sent to the cloud for translation and formatting; raw DB rows never leave your server.
 
 **Example:**
 ```
@@ -73,14 +75,14 @@ Q: "How many delivered orders did we have in São Paulo last month?"
 ## Architecture
 
 ```
-Web Panel (React)  ←→  Backend (FastAPI)  ←→  Local Model (Ollama + qwen3.5:2b)
+Web Panel (React)  ←→  Backend (FastAPI)  ←→  DashScope (qwen3.7-plus)
                               ↓
                         Postgres (read-only role)
 ```
 
 - **Web Panel** — thin chat UI for questions and structured results
 - **Backend Orchestrator** — owns tool definitions, validation, function dispatch, and the read-only DB connection. Also runs the cross-cutting trust layer: a translation cache, a deterministic filter-faithfulness guard, per-request audit logging, and client-facing error sanitization.
-- **Local LLM** — stateless intent translator (question → tool call, rows → formatted answer)
+- **Cloud LLM (DashScope)** — stateless translator (question → tool call) and answer formatter (aggregates → prose). The database never leaves your server; question text and summary results are sent to Alibaba Cloud for inference.
 - **PostgreSQL** — source of truth, reached only via pre-written parameterized queries
 
 ---
@@ -91,7 +93,7 @@ Web Panel (React)  ←→  Backend (FastAPI)  ←→  Local Model (Ollama + qwen
 |-------|------------|
 | **Backend** | Python 3.9+ · FastAPI · asyncpg (async Postgres) |
 | **Frontend** | React + TypeScript · Vite · TailwindCSS |
-| **LLM** | Ollama · qwen3.5:2b (2B params, excellent tool-calling, CPU-friendly) |
+| **LLM** | Alibaba DashScope · `qwen3.7-plus` (cloud, via native SDK) |
 | **Database** | PostgreSQL (read-only role) |
 | **Deployment** | Local dev (Mac/Linux) · VPS ready · schema-agnostic via `SCHEMA_NAME` |
 
@@ -118,7 +120,7 @@ The Olist dataset captures 2.5+ years of Brazilian e-commerce data (Sept 2016 �
 
 ## Project Phases
 
-> **Current status:** Phases 0, 1, and 2 are complete and operational.
+> **Current status:** Phases 0–3 are complete. This branch (`fa/cloud-dev`) uses **DashScope cloud inference** instead of local Ollama.
 
 ### Phase 0 — Foundation ✅
 Prove the vertical slice end-to-end:
@@ -164,6 +166,15 @@ prompt all read from the active config — no per-schema code paths.
 - Adding a new schema = one config module + one entry in
   `schemas/__init__.py::_BUILTIN`
 
+### Cloud LLM (DashScope) — `fa/cloud-dev` ✅
+- ✅ `backend/model_client/` — native DashScope SDK (`MultiModalConversation` API)
+- ✅ Tool translation + cloud answer formatting via `qwen3.7-plus`
+- ✅ Deterministic template fallback if formatting call fails
+- ✅ `.env` at repo root auto-loaded by `backend/config.py`
+- ✅ Production boot guard requires `DASHSCOPE_API_KEY`
+
+See `model_serving_plan.md` for the model-tier architecture and privacy boundary.
+
 ### Phase 4 — Long Tail (Optional)
 - Fenced generated-SQL escape hatch (read-only role, LIMIT enforced)
 - Multi-step orchestration
@@ -175,17 +186,14 @@ prompt all read from the active config — no per-schema code paths.
 
 ### TL;DR — Run the whole thing
 
-Assuming Postgres has the `olist` DB loaded, the `nlq_readonly` role exists (see step 2), `.env` is configured, deps are installed, and the model is pulled, you need **three things running**:
+Assuming Postgres has the `olist` DB loaded, the `nlq_readonly` role exists (see step 2), `.env` is configured (including `DASHSCOPE_API_KEY`), and deps are installed, you need **two things running**:
 
 ```bash
-# 1. Ollama (if not already running as a service)
-ollama serve
-
-# 2. Backend (terminal 1) — from the repo root
+# 1. Backend (terminal 1) — from the repo root
 cd backend && ../venv/bin/uvicorn main:app --reload --port 8000
 #   (or: source venv/bin/activate, then `cd backend && uvicorn main:app --reload --port 8000`)
 
-# 3. Frontend (terminal 2)
+# 2. Frontend (terminal 2)
 cd frontend && npm run dev
 ```
 
@@ -199,14 +207,14 @@ curl -X POST http://localhost:8000/api/query \
   -d '{"question":"How many delivered orders in São Paulo last month?"}'
 ```
 
-First-time setup (DB role, venv, `.env`, model) is detailed in the numbered steps below.
+First-time setup (DB role, venv, `.env`, DashScope API key) is detailed in the numbered steps below.
 
 ### Prerequisites
 
 - **Python 3.9+** (3.9 verified working; 3.10+ also fine)
 - **Node.js 18+** (for frontend)
 - **PostgreSQL 12+** with the Olist dataset loaded
-- **Ollama** running locally with `qwen3.5:2b` pulled
+- **Alibaba DashScope API key** with access to `qwen3.7-plus` ([Model Studio](https://www.alibabacloud.com/help/en/model-studio/get-api-key))
 
 ### 1. Clone & Setup Backend
 
@@ -224,7 +232,7 @@ pip install -r backend/requirements.txt
 
 # Copy .env.example and configure
 cp .env.example .env
-# Edit .env with your DB credentials, Ollama URL, etc.
+# Edit .env with your DB credentials, DashScope API key, etc.
 ```
 
 ### 2. Set Up the Database (Migrations)
@@ -274,13 +282,24 @@ psql -d olist -f sql/readonly_role.sql        # read-only role
 ```
 </details>
 
-### 3. Start Ollama
+### 3. Configure DashScope
+
+Copy `.env.example` to `.env` at the **repo root** (not inside `backend/`). The backend loads it automatically via `backend/config.py`.
 
 ```bash
-ollama serve
-# In another terminal:
-ollama pull qwen3.5:2b
+# Required — get a key from Alibaba Model Studio:
+# https://www.alibabacloud.com/help/en/model-studio/get-api-key
+DASHSCOPE_API_KEY=sk-your-key-here
+DASHSCOPE_BASE_URL=https://dashscope-intl.aliyuncs.com/api/v1
+DASHSCOPE_MODEL=qwen3.7-plus
+DASHSCOPE_ENABLE_THINKING=false
+LLM_TIMEOUT_SECONDS=30
+LLM_MAX_ATTEMPTS=2
 ```
+
+Use the **international** base URL (`dashscope-intl.aliyuncs.com`) if your API key was created on the international console. Thinking mode must stay off for JSON tool calls.
+
+> **Privacy note:** Question text and aggregated query results (counts, sums, top-N labels) are sent to Alibaba Cloud for AI processing. Raw database rows, credentials, and session tokens never leave your server. `list_orders` payloads are sampled (total + first 3 rows) before formatting egress.
 
 ### 4. Start Backend
 
@@ -338,7 +357,7 @@ Ask a natural-language question.
   "result": {
     "count": 1059
   },
-  "formatted_answer": "There were 1,059 orders (city: sao paulo status: delivered ...).",
+  "formatted_answer": "There were 1,059 delivered orders in São Paulo last month.",
   "source": "olist_orders_dataset JOIN olist_customers_dataset",
   "error": null,
   "cached": false,
@@ -415,13 +434,15 @@ Each function is a **pre-written parameterized query**. The LLM only fills typed
 ## Project Files
 
 - `CLAUDE.md` — Standing brief with architecture & principles
-- `project_plan.md` — Detailed implementation roadmap (Phase 0–2)
+- `project_plan.md` — Detailed implementation roadmap (Phase 0–3)
+- `model_serving_plan.md` — DashScope model-tier architecture and privacy boundary
 - `olist_tables_structure.sql` — PostgreSQL schema dump (reference)
 - `sql/readonly_role.sql` — Read-only role definition (manual setup)
 - `backend/migrate.py` — Database migration runner (`status` / `up` / `create-db`)
 - `backend/migrations/` — Ordered, idempotent SQL migrations (schema + role)
 - `backend/` — Python FastAPI application
   - `orchestrator.py` — tool-calling loop, prompt, caching + guard wiring
+  - `model_client/` — DashScope client (`qwen3.7-plus` via MultiModalConversation API)
   - `functions/` — the six parameterized query functions + registry
   - `validation/` — cities, dates, enums, and the filter-faithfulness guard
   - `cache.py` — Layer 1 LLM-translation cache (TTL + LRU)
@@ -444,9 +465,11 @@ pytest tests/test_cache.py -v              # translation cache: hit/miss/TTL/LRU
 pytest tests/test_faithfulness.py -v       # filter-guard detection/repair
 pytest tests/test_audit.py -v              # audit record shape + JSONL writing
 pytest tests/test_request_validation.py -v # empty/oversized question rejection
+pytest tests/test_model_client.py -v       # DashScope client (mocked, no API key)
+pytest tests/test_format_cloud.py -v       # cloud formatting + fallback
 ```
 
-### Eval Set (50 Q/A pairs, needs the backend + Ollama running)
+### Eval Set (50 Q/A pairs, needs the backend + DashScope API key)
 ```bash
 # standalone report (prints per-case PASS/FAIL + pass rate):
 API_URL=http://localhost:8000 ../venv/bin/python tests/test_eval.py
@@ -454,10 +477,7 @@ API_URL=http://localhost:8000 ../venv/bin/python tests/test_eval.py
 pytest tests/test_eval.py -v
 ```
 
-Current: **94% pass** with `qwen3.5:2b`. The harness gate is **85%** — a realistic
-floor for a 2B dev model (tool selection is near-perfect; the residual gap is
-filter faithfulness on ambiguous phrasings, which a larger model closes). The
-eval's job is to catch regressions below that floor, not to certify the model.
+Current: eval pass rate target **≥85%** with `qwen3.7-plus` on DashScope. The harness gate is **85%** — its job is to catch regressions below that floor, not to certify the model.
 
 ---
 
@@ -472,11 +492,12 @@ eval's job is to catch regressions below that floor, not to certify the model.
 ✅ **Citations** — every answer shows what table/filters were queried  
 ✅ **Validation** — all user inputs (cities, dates, enums) validated before querying; empty/oversized questions rejected with HTTP 422  
 ✅ **Audit log** — one append-only JSONL record per request (question, tool, filters, row-free result summary, timing, guard repairs) for verifiable answers  
+✅ **Cloud LLM via DashScope** — `qwen3.7-plus` for tool translation and answer formatting; DB stays local  
 ✅ **Error sanitization** — raw DB/internal errors never leak to the client (configurable for dev)  
-✅ **Authentication** — argon2id password hashing (off the event loop), signed httpOnly session cookies, CSRF double-submit, per-(email, IP) throttling on login **and** register, uniform login errors (no user enumeration), and a production boot guard that refuses to start with a default `SESSION_SECRET` or `COOKIE_SECURE=false`  
+✅ **Authentication** — argon2id password hashing (off the event loop), signed httpOnly session cookies, CSRF double-submit, per-(email, IP) throttling on login **and** register, uniform login errors (no user enumeration), and production boot guards (`SESSION_SECRET`, `COOKIE_SECURE`, `DASHSCOPE_API_KEY`)  
 ✅ **Multi-tenant isolation (IDOR-safe)** — every session/message route enforces ownership and returns **404** (not 403) on cross-user or unknown ids; `/api/query` re-checks session ownership before persisting; `ON DELETE CASCADE` wipes a user's sessions and messages  
 
-This is designed for **regulated environments** (finance, health, legal) where data can't leave the building and answers must be auditable.
+The database stays on your infrastructure. On this branch, **question text and aggregated results** are sent to Alibaba Cloud for inference — a trade-off for faster, higher-quality answers. Buyers who require fully on-prem inference should use a local-model branch instead.
 
 ### Accepted risks (single-tenant / local deployment)
 
@@ -507,6 +528,7 @@ MIT
 - **How do I build this?** See `project_plan.md` (implementation roadmap)
 - **Why no generated SQL?** See "Core Principles" above (faithfulness + control)
 - **Can I use my own database?** Yes — Phase 3 makes this schema-agnostic. For now, load Olist as a testbed.
+- **How does the cloud model work?** See `model_serving_plan.md` (DashScope integration, privacy boundary)
 
 ---
 
@@ -517,9 +539,10 @@ MIT
 - [x] Phase 0: Vertical slice (get_order_status + count_orders)
 - [x] Phase 1: Full function library + eval set
 - [x] Phase 2: Hardening (audit log, cache, faithfulness guard, timeouts, row caps, rate limiting, error sanitization, request validation, `/api/eval`)
-- [ ] Phase 3: Schema extraction (config-driven onboarding)
+- [x] Phase 3: Schema-agnostic config (`SCHEMA_NAME`, Olist + Shopify stub)
+- [x] Cloud LLM: DashScope `qwen3.7-plus` (`fa/cloud-dev`)
 - [ ] Phase 4: Long tail (SQL escape hatch, multi-step, integrations)
 
 ---
 
-**Built with ❤️ for trustworthy, local data access.**
+**Built for trustworthy, verifiable answers — database local, inference on DashScope.**

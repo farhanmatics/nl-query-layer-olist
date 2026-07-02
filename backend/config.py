@@ -1,5 +1,10 @@
 from pydantic_settings import BaseSettings
 from datetime import datetime
+from pathlib import Path
+
+# .env lives at the repo root (one level above backend/). Without this,
+# `cd backend && uvicorn main:app` would not see DASHSCOPE_API_KEY etc.
+_ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
 
 # The placeholder session secret. The boot path refuses to start in production
 # while this is still in use (see main.startup).
@@ -15,9 +20,13 @@ class Settings(BaseSettings):
     db_pool_max: int = 10
     db_statement_timeout: int = 5000
 
-    ollama_base_url: str = "http://localhost:11434"
-    ollama_model: str = "qwen3.5:2b"
-    llm_timeout_seconds: int = 90
+    # DashScope cloud LLM (qwen3.7-plus via MultiModalConversation API).
+    dashscope_api_key: str = ""
+    dashscope_base_url: str = "https://dashscope-intl.aliyuncs.com/api/v1"
+    dashscope_model: str = "qwen3.7-plus"
+    # Thinking mode is incompatible with JSON structured output for tool calls.
+    dashscope_enable_thinking: bool = False
+    llm_timeout_seconds: int = 30
     llm_max_attempts: int = 2
 
     # Layer 1 cache: question -> tool call (the LLM translation step only).
@@ -101,7 +110,7 @@ class Settings(BaseSettings):
     argon2_parallelism: int = 1
 
     class Config:
-        env_file = ".env"
+        env_file = str(_ENV_FILE)
         case_sensitive = False
 
     @property

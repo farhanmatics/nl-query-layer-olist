@@ -28,7 +28,7 @@ def test_model_changes_key():
 def test_default_model_matches_settings():
     """Omitting model defaults to the served model from settings."""
     assert translation_key(QUESTION, PROMPT) == translation_key(
-        QUESTION, PROMPT, model=settings.ollama_model
+        QUESTION, PROMPT, model=settings.dashscope_model
     )
 
 

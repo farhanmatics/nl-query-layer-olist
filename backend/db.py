@@ -2,6 +2,7 @@ import asyncio
 import asyncpg
 from asyncpg.pool import Pool
 from typing import Optional
+from datetime import datetime
 from config import settings
 import logging
 
@@ -81,6 +82,28 @@ async def check_db_health() -> bool:
         return False
 
 
+def _format_sql_for_log(query: str, args: tuple) -> str:
+    """Render a parameterized query with args inlined for console logging only."""
+    rendered = query
+    for i, arg in enumerate(args, 1):
+        if isinstance(arg, str):
+            val = "'" + arg.replace("'", "''") + "'"
+        elif isinstance(arg, datetime):
+            val = "'" + arg.isoformat() + "'"
+        else:
+            val = repr(arg)
+        rendered = rendered.replace(f"${i}", val, 1)
+    return " ".join(rendered.split())
+
+
+def _log_sql(query: str, args: tuple) -> None:
+    """Print each SQL statement to the backend console (dev visibility)."""
+    if args:
+        logger.info("SQL> %s", _format_sql_for_log(query, args))
+    else:
+        logger.info("SQL> %s", " ".join(query.split()))
+
+
 async def execute_query(query: str, *args, enforce_cap: bool = True) -> list[dict]:
     """Run a read query and return rows as dicts.
 
@@ -91,6 +114,7 @@ async def execute_query(query: str, *args, enforce_cap: bool = True) -> list[dic
     pool = await get_pool()
     async with pool.acquire() as conn:
         await conn.execute(f"SET statement_timeout = {settings.db_statement_timeout}")
+        _log_sql(query, args)
         rows = await conn.fetch(query, *args)
         if enforce_cap and len(rows) > settings.max_result_rows:
             raise RowCapExceeded(len(rows), settings.max_result_rows)
@@ -101,5 +125,6 @@ async def execute_scalar(query: str, *args):
     pool = await get_pool()
     async with pool.acquire() as conn:
         await conn.execute(f"SET statement_timeout = {settings.db_statement_timeout}")
+        _log_sql(query, args)
         result = await conn.fetchval(query, *args)
         return result

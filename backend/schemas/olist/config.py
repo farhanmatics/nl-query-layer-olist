@@ -50,6 +50,8 @@ COL_CUSTOMER_UNIQUE_ID = ColumnRef("customers", "customer_unique_id")
 
 COL_PRODUCT_ID = ColumnRef("order_items", "product_id")
 COL_SELLER_ID = ColumnRef("order_items", "seller_id")
+COL_SELLER_CITY = ColumnRef("sellers", "seller_city")
+COL_SELLER_STATE = ColumnRef("sellers", "seller_state")
 COL_PRICE = ColumnRef("order_items", "price")
 COL_FREIGHT_VALUE = ColumnRef("order_items", "freight_value")
 
@@ -133,11 +135,56 @@ SCOPE_PATTERNS = (
 
 # --- Prompt config ----------------------------------------------------------
 
+SOURCE_CITATIONS = {
+    "get_order_status": "olist_orders_dataset JOIN olist_customers_dataset",
+    "count_orders": "olist_orders_dataset JOIN olist_customers_dataset",
+    "get_revenue": "olist_order_payments_dataset JOIN olist_orders_dataset",
+    "count_low_reviews": "olist_order_reviews_dataset JOIN olist_orders_dataset",
+    "top_products": "olist_order_items_dataset JOIN olist_products_dataset",
+    "list_orders": "olist_orders_dataset JOIN olist_customers_dataset",
+    "get_customer_info": "olist_customers_dataset JOIN olist_orders_dataset JOIN olist_order_payments_dataset",
+    "get_product_info": "olist_products_dataset JOIN olist_order_items_dataset",
+    "get_seller_info": "olist_sellers_dataset JOIN olist_order_items_dataset",
+    "count_by_status": "olist_orders_dataset",
+    "count_by_payment_type": "olist_order_payments_dataset JOIN olist_orders_dataset",
+    "count_by_category": "olist_order_items_dataset JOIN olist_products_dataset",
+    "revenue_by_state": "olist_order_payments_dataset JOIN olist_orders_dataset JOIN olist_customers_dataset",
+    "revenue_by_category": "olist_order_items_dataset JOIN olist_products_dataset",
+    "revenue_by_seller": "olist_order_items_dataset JOIN olist_sellers_dataset",
+    "revenue_by_payment_type": "olist_order_payments_dataset",
+    "revenue_trend": "olist_order_payments_dataset JOIN olist_orders_dataset",
+    "top_categories": "olist_order_items_dataset JOIN olist_products_dataset",
+    "count_products": "olist_products_dataset",
+    "products_by_rating": "olist_order_reviews_dataset JOIN olist_order_items_dataset",
+    "top_sellers": "olist_order_items_dataset JOIN olist_sellers_dataset",
+    "seller_metrics": "olist_sellers_dataset JOIN olist_order_items_dataset",
+    "seller_concentration": "olist_order_items_dataset",
+    "sellers_by_state": "olist_sellers_dataset JOIN olist_order_items_dataset",
+    "customer_lifetime_value": "olist_order_payments_dataset JOIN olist_orders_dataset",
+    "repeat_customer_rate": "olist_orders_dataset",
+    "customers_by_city": "olist_orders_dataset JOIN olist_customers_dataset",
+    "customer_order_history": "olist_orders_dataset JOIN olist_order_payments_dataset",
+    "customer_cohort_analysis": "olist_orders_dataset JOIN olist_order_payments_dataset",
+    "average_rating_by_product": "olist_order_reviews_dataset JOIN olist_order_items_dataset",
+    "average_rating_by_seller": "olist_order_reviews_dataset JOIN olist_order_items_dataset",
+    "average_rating_by_category": "olist_order_reviews_dataset JOIN olist_products_dataset",
+    "review_score_distribution": "olist_order_reviews_dataset",
+    "review_sentiment_trend": "olist_order_reviews_dataset",
+    "on_time_delivery_rate": "olist_orders_dataset",
+    "average_delivery_days": "olist_orders_dataset",
+    "late_deliveries": "olist_orders_dataset",
+    "fulfillment_status_breakdown": "olist_orders_dataset",
+    "seller_comparison": "olist_order_items_dataset JOIN olist_sellers_dataset",
+    "category_comparison": "olist_order_items_dataset JOIN olist_products_dataset",
+    "state_comparison": "olist_orders_dataset JOIN olist_customers_dataset",
+    "payment_type_breakdown": "olist_order_payments_dataset",
+}
+
 PROMPT = PromptConfig(
     dataset_description=(
         "You translate a natural-language question into a single JSON function call "
         "against the Olist Brazilian e-commerce dataset (orders, customers, items, "
-        "products, payments, reviews)."
+        "products, payments, reviews, sellers)."
     ),
     city_rule=(
         'normalize to lowercase without accents (e.g., "São Paulo" → "sao paulo", '
@@ -150,7 +197,9 @@ PROMPT = PromptConfig(
     ),
     group_by_rule=(
         'when a question says "by X" / "broken down by X" / "grouped by X" / "per X" '
-        '(X = state, category, or month), set group_by to that dimension.'
+        '(X = state, category, or month), set group_by to that dimension on get_revenue, '
+        'or pick the dedicated breakdown tool (revenue_by_state, revenue_by_category, '
+        'revenue_trend, fulfillment_status_breakdown, etc.) when one exists.'
     ),
     few_shot_examples=(
         ('How many delivered orders did we have in São Paulo last month?',
@@ -168,9 +217,9 @@ PROMPT = PromptConfig(
         ('What was our total revenue last month?',
          '{"tool": "get_revenue", "args": {"date_token": "last_month"}}'),
         ('Revenue by state this year',
-         '{"tool": "get_revenue", "args": {"date_token": "this_year", "group_by": "state"}}'),
+         '{"tool": "revenue_by_state", "args": {"date_token": "this_year"}}'),
         ('Show revenue broken down by category',
-         '{"tool": "get_revenue", "args": {"group_by": "category"}}'),
+         '{"tool": "revenue_by_category", "args": {}}'),
         ('Total revenue in MG last year',
          '{"tool": "get_revenue", "args": {"state": "MG", "date_token": "last_year"}}'),
         ('How much revenue did the health_beauty category make?',
@@ -191,15 +240,18 @@ PROMPT = PromptConfig(
          '{"tool": "list_orders", "args": {"status": "canceled", "limit": 20}}'),
         ('List 30 shipped orders in MG',
          '{"tool": "list_orders", "args": {"status": "shipped", "state": "MG", "limit": 30}}'),
+        ('Who are our top sellers by revenue?',
+         '{"tool": "top_sellers", "args": {"by": "revenue", "limit": 10}}'),
+        ('What percent of orders are delivered on time?',
+         '{"tool": "on_time_delivery_rate", "args": {}}'),
+        ('Break down orders by status',
+         '{"tool": "fulfillment_status_breakdown", "args": {}}'),
+        ('How many products do we have in the perfumaria category?',
+         '{"tool": "count_products", "args": {"category": "perfumaria"}}'),
+        ('How many perfumaria orders were placed last year?',
+         '{"tool": "count_by_category", "args": {"category": "perfumaria", "date_token": "last_year"}}'),
     ),
-    source_citations={
-        "get_order_status": "olist_orders_dataset JOIN olist_customers_dataset",
-        "count_orders": "olist_orders_dataset JOIN olist_customers_dataset",
-        "get_revenue": "olist_order_payments_dataset / olist_order_items_dataset JOIN olist_orders_dataset",
-        "count_low_reviews": "olist_order_reviews_dataset JOIN olist_orders_dataset",
-        "top_products": "olist_order_items_dataset JOIN olist_products_dataset, product_category_name_translation",
-        "list_orders": "olist_orders_dataset JOIN olist_customers_dataset",
-    },
+    source_citations=SOURCE_CITATIONS,
 )
 
 
@@ -209,20 +261,8 @@ PROMPT = PromptConfig(
 # using the config we hand them, and the config builds them via these
 # factories. We resolve at factory-call time.
 def _factories() -> tuple:
-    from functions.count_orders import make_count_orders
-    from functions.count_low_reviews import make_count_low_reviews
-    from functions.get_order_status import make_get_order_status
-    from functions.get_revenue import make_get_revenue
-    from functions.list_orders import make_list_orders
-    from functions.top_products import make_top_products
-    return (
-        make_count_orders,
-        make_count_low_reviews,
-        make_get_order_status,
-        make_get_revenue,
-        make_list_orders,
-        make_top_products,
-    )
+    from functions.all_factories import all_factories
+    return all_factories()
 
 
 # --- The config -------------------------------------------------------------
@@ -252,6 +292,8 @@ CONFIG = SchemaConfig(
         "customer_unique_id": COL_CUSTOMER_UNIQUE_ID,
         "product_id": COL_PRODUCT_ID,
         "seller_id": COL_SELLER_ID,
+        "seller_city": COL_SELLER_CITY,
+        "seller_state": COL_SELLER_STATE,
         "price": COL_PRICE,
         "freight_value": COL_FREIGHT_VALUE,
         "product_category_pt": COL_PRODUCT_CATEGORY_PT,

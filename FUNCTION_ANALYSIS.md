@@ -328,7 +328,7 @@ olist_orders_dataset ─┼─ olist_order_items_dataset (product_id, seller_id)
 - ✅ `get_order_status` (A1)
 - ✅ `count_orders` (B1)
 
-**Phase 1 (Full MVP — 12–16 functions)**
+**Phase 1 (Full MVP — 12–16 functions)** — ✅ **COMPLETE**
 Core functions that cover 80% of use cases:
 1. `get_order_status` (lookup)
 2. `count_orders` (flagship: count with filters)

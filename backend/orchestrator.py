@@ -1,7 +1,7 @@
 import copy
 import json
 import logging
-import httpx
+import asyncio
 from datetime import datetime
 from typing import Optional
 from config import settings
@@ -83,10 +83,10 @@ async def process_question(
     """
     Main orchestration pipeline:
     1. Build system prompt with tool schemas
-    2. Call Ollama to get tool name + args
+    2. Call DashScope to get tool name + args
     3. Validate arguments
     4. Execute parameterized query
-    5. Format answer with Ollama
+    5. Format answer with DashScope (fallback to templates on error)
     6. Return structured response
 
     session_id (optional): if provided, the backend resolves this turn
@@ -258,7 +258,9 @@ async def process_question(
                 await _persist_turn(session_id, user_id, question, response)
             return response
 
-        formatted_answer = await format_answer(tool_name, result)
+        formatted_answer = await format_answer(
+            question, tool_name, result.get("filters") or {}, result
+        )
 
         # Persist successful turn for future follow-ups in the same session.
         # For durable sessions: write to the messages table. For ephemeral
@@ -370,7 +372,7 @@ Now convert the following question. Extract EVERY filter (city, state, status, d
 def _extract_json(content: str) -> dict:
     """Best-effort parse of an LLM tool call.
 
-    Ollama's format=json usually returns a clean object, but small models
+    Ollama's format=json usually returns a clean object, but models
     occasionally wrap it in prose or ```json fences. Try a strict parse first,
     then fall back to the outermost {...} span. Raises json.JSONDecodeError if
     nothing parseable is found.
@@ -392,55 +394,36 @@ def _extract_json(content: str) -> dict:
 
 
 async def call_llm_for_tool(question: str, system_prompt: str) -> dict:
-    """Call Ollama to translate question into a tool call.
+    """Call DashScope to translate question into a tool call (JSON).
 
-    Hardened against the realities of small models on CPU:
-    - temperature=0 on the first pass for deterministic, fast tool selection
-    - a generous timeout (inference latency swings widely on CPU)
-    - retry on timeout or unparseable output; because temp=0 is deterministic,
-      a parse-failure retry raises the temperature so the resample differs
+    Retries on parse failure with higher temperature so a bad output doesn't
+    simply repeat. Timeout is enforced at the orchestrator level via asyncio.
     """
-    base_payload = {
-        "model": settings.ollama_model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": question},
-        ],
-        "stream": False,
-        "format": "json",
-    }
+    from model_client import get_model_client
+    from model_client.dashscope_client import DashScopeError
 
+    client = get_model_client()
     last_error = "LLM call failed"
 
     for attempt in range(1, settings.llm_max_attempts + 1):
-        # First attempt greedy (temp=0); later attempts sample so a deterministic
-        # bad output doesn't simply repeat.
         temperature = 0 if attempt == 1 else 0.4
-        payload = {**base_payload, "options": {"temperature": temperature}}
         try:
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    f"{settings.ollama_base_url}/api/chat",
-                    json=payload,
-                    timeout=settings.llm_timeout_seconds,
-                )
-                response.raise_for_status()
-
-            content = response.json().get("message", {}).get("content", "")
+            content = await asyncio.wait_for(
+                client.complete_json(system_prompt, question, temperature=temperature),
+                timeout=settings.llm_timeout_seconds,
+            )
             return _extract_json(content)
-
         except json.JSONDecodeError as e:
             last_error = "LLM returned invalid JSON"
             logger.warning(f"Attempt {attempt}: failed to parse LLM JSON: {e}")
-        except httpx.TimeoutException:
+        except TimeoutError:
             last_error = (
-                f"Model timed out after {settings.llm_timeout_seconds}s "
-                "(slow inference on CPU) — please try again"
+                f"Model timed out after {settings.llm_timeout_seconds}s — please try again"
             )
             logger.warning(f"Attempt {attempt}: LLM request timed out")
-        except httpx.RequestError as e:
-            last_error = f"LLM service unreachable: {e!r}"
-            logger.warning(f"Attempt {attempt}: LLM request failed: {e!r}")
+        except DashScopeError as e:
+            last_error = str(e) or "DashScope API error"
+            logger.warning(f"Attempt {attempt}: DashScope error: {e!r}")
         except Exception as e:
             last_error = str(e) or "Unexpected LLM error"
             logger.error(f"Attempt {attempt}: unexpected error calling LLM: {e!r}")
@@ -501,11 +484,63 @@ async def dispatch_function(tool_name: str, args: dict) -> dict:
         return {"error": client_error(e, "The query could not be completed.")}
 
 
-async def format_answer(tool_name: str, result: dict) -> str:
-    """Format the result into a natural language answer using the LLM (Phase 1)."""
-    if "error" in result:
-        return result["error"]
+_FORMAT_SYSTEM_PROMPT = (
+    "You are a data assistant. Given a query operation, its filters, and the "
+    "database result, write ONE clear sentence answering the user's question. "
+    "Use the exact numbers from the result — never estimate or round differently. "
+    "Mention key filters naturally. Keep it under 2 sentences."
+)
 
+
+def _sanitize_result_for_llm(tool_name: str, result: dict) -> dict:
+    """Collapse result payloads before sending aggregates to the cloud model."""
+    if tool_name == "list_orders":
+        orders = result.get("orders") or []
+        return {
+            "total_count": result.get("total_count", 0),
+            "showing": len(orders),
+            "offset": result.get("offset", 0),
+            "sample": orders[:3],
+        }
+    if tool_name == "top_products":
+        return {
+            k: v for k, v in result.items()
+            if k != "filters"
+        }
+    return {k: v for k, v in result.items() if k != "filters"}
+
+
+async def call_llm_for_format(
+    question: str,
+    tool_name: str,
+    filters: dict,
+    result: dict,
+) -> str:
+    """Ask DashScope to turn aggregates into a natural-language sentence."""
+    from model_client import get_model_client
+    from model_client.dashscope_client import DashScopeError
+
+    payload = json.dumps(
+        {
+            "question": question,
+            "operation": tool_name,
+            "filters": filters,
+            "result": _sanitize_result_for_llm(tool_name, result),
+        },
+        default=str,
+    )
+    client = get_model_client()
+    text = await asyncio.wait_for(
+        client.complete_text(_FORMAT_SYSTEM_PROMPT, payload, temperature=0.3),
+        timeout=settings.llm_timeout_seconds,
+    )
+    if not text or not text.strip():
+        raise DashScopeError("Empty formatted answer from DashScope")
+    return text.strip()
+
+
+def _format_answer_deterministic(tool_name: str, result: dict) -> str:
+    """Fallback templates when cloud formatting is unavailable."""
     if tool_name == "get_order_status":
         status = result.get("order_status", "unknown")
         city = result.get("customer_city", "unknown")
@@ -563,6 +598,28 @@ async def format_answer(tool_name: str, result: dict) -> str:
         )
 
     return "Query executed successfully."
+
+
+async def format_answer(
+    question: str,
+    tool_name: str,
+    filters: dict,
+    result: dict,
+) -> str:
+    """Format the result into a natural language answer via DashScope.
+
+    Falls back to deterministic templates if the cloud call fails so a
+    correct number is never blocked by a formatting error.
+    """
+    if "error" in result:
+        return result["error"]
+
+    try:
+        return await call_llm_for_format(question, tool_name, filters, result)
+    except Exception as e:
+        logger.warning(f"Cloud format failed, using deterministic fallback: {e!r}")
+        merged = {**result, "filters": filters}
+        return _format_answer_deterministic(tool_name, merged)
 
 
 def _format_date_range(value) -> Optional[str]:

@@ -78,6 +78,12 @@ def test_classify_empty_is_followup():
     assert classify_turn("", "count_orders") == "FOLLOW_UP"
 
 
+def test_classify_deixis_with_measure_noun_is_followup():
+    """'about those orders…' refers back; measure noun must not force FRESH."""
+    q = "about those orders how many have cancelled"
+    assert classify_turn(q, "count_orders") == "FOLLOW_UP"
+
+
 # --- resolution: FRESH path --------------------------------------------------
 
 def test_resolve_fresh_no_prior():
@@ -139,6 +145,25 @@ def test_resolve_followup_status_overlay_swaps_status():
     assert r["args"]["status"] == "canceled"  # overlaid
     assert r["args"]["city"] == "sao paulo"   # carried
     assert r["args"]["date_token"] == "last_month"  # carried
+
+
+def test_resolve_deixis_status_overlay_keeps_city_and_date():
+    """'about those orders how many cancelled' keeps SP + last_month, swaps status."""
+    prior = {
+        "operation": "count_orders",
+        "args": {"city": "sao paulo", "status": "delivered", "date_token": "last_month"},
+    }
+    r = resolve(
+        "about those orders how many have cancelled",
+        {"tool": "count_orders", "args": {}},
+        prior=prior,
+        classification="FOLLOW_UP",
+    )
+    assert r["operation"] == "count_orders"
+    assert r["args"]["status"] == "canceled"
+    assert r["args"]["city"] == "sao paulo"
+    assert r["args"]["date_token"] == "last_month"
+    assert r["context"]["inherited"] is True
 
 
 def test_resolve_followup_category_overlay():

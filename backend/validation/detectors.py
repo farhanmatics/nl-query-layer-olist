@@ -121,6 +121,18 @@ def detect_city(question: str, known_cities: Optional[set] = None) -> Optional[s
 
 _STATUS_RE: Optional[re.Pattern] = None
 
+# Common user spellings that map to schema enum values (British → US, etc.).
+_STATUS_ALIASES = {
+    "cancelled": "canceled",
+}
+
+
+def _normalize_status_aliases(question: str) -> str:
+    q = question.lower()
+    for alias, canonical in _STATUS_ALIASES.items():
+        q = re.sub(r"\b" + re.escape(alias) + r"\b", canonical, q)
+    return q
+
 
 def _build_status_pattern() -> re.Pattern:
     """Compile a regex over the active schema's allowed status values.
@@ -146,7 +158,7 @@ def detect_status(question: str) -> Optional[str]:
     global _STATUS_RE
     if _STATUS_RE is None:
         _STATUS_RE = _build_status_pattern()
-    m = _STATUS_RE.search(question)
+    m = _STATUS_RE.search(_normalize_status_aliases(question))
     if m:
         return m.group(1).lower()
     return None
@@ -242,6 +254,10 @@ _FOLLOWUP_CONNECTORS = (
     "also ",
     "what about ",
     "how about ",
+    "about those ",
+    "about these ",
+    "of those ",
+    "for those ",
     "& ",
     "but ",
 )
@@ -255,6 +271,15 @@ MEASURE_NOUNS = frozenset({
     "product", "products",
     "status",
 })
+
+
+# Deictic references back to the prior turn ("those orders", "these ones").
+_DEIXIS_RE = re.compile(r"\b(those|these|them|the same)\b", re.IGNORECASE)
+
+
+def contains_deixis_reference(question: str) -> bool:
+    """True when the user refers back to a prior result set (those/these/them)."""
+    return bool(_DEIXIS_RE.search(question))
 
 
 def starts_with_followup_connector(question: str) -> bool:

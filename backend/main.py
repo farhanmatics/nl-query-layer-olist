@@ -144,6 +144,11 @@ async def startup():
                 "would ride over plaintext HTTP. Set COOKIE_SECURE=true (behind "
                 "HTTPS) before boot."
             )
+        if not settings.dashscope_api_key.strip():
+            raise RuntimeError(
+                "DASHSCOPE_API_KEY is missing in a production environment. "
+                "Set a valid DashScope API key in the environment before boot."
+            )
 
     pool = await get_pool()
     logger.info("Database pool initialized")
@@ -330,15 +335,9 @@ async def cache_clear(_user: dict = Depends(_require_user)):
 
 
 async def check_llm_health() -> bool:
-    try:
-        import httpx
+    from model_client import get_model_client
 
-        async with httpx.AsyncClient() as client:
-            response = await client.get(f"{settings.ollama_base_url}/api/tags", timeout=2)
-            return response.status_code == 200
-    except Exception as e:
-        logger.error(f"LLM health check failed: {e}")
-        return False
+    return await get_model_client().health_check()
 
 
 class EvalCaseResult(BaseModel):

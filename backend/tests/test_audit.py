@@ -85,6 +85,8 @@ def test_build_record_has_expected_keys():
         "latency_ms",
         "user_id",
         "session_id",
+        "llm_provider",
+        "llm_model",
     }
     assert rec["request_id"] == "abc123"
     assert rec["cached"] is True
