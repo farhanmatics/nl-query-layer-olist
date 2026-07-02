@@ -72,7 +72,7 @@ def _item_revenue_parts(cfg: SchemaConfig) -> dict:
         "from_clause": (
             f"FROM {table_for(col_item_price, cfg)} oi "
             f"JOIN {table_for(col_purchase, cfg)} o ON oi.{col_name(col_order_id)} = o.{col_name(col_order_id)} "
-            f"LEFT JOIN {table_for(col_product_id, cfg)} p "
+            f"LEFT JOIN {table_for(col_cat_pt, cfg)} p "
             f"ON oi.{col_name(col_product_id)} = p.{col_name(col_product_id)} "
             f"LEFT JOIN {table_for(col_cat_en, cfg)} t "
             f"ON p.{col_name(col_cat_pt)} = t.{col_name(col_cat_pt)}"

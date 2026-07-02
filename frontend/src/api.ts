@@ -19,9 +19,19 @@ export interface GuardReport {
   unresolved: string[]
 }
 
+export interface ClarifyOption {
+  label: string
+  reply: string
+}
+
 export interface ClarifyBlock {
   prompt: string
-  options: string[]
+  options: (string | ClarifyOption)[]
+}
+
+export interface MeasureMeta {
+  id: string
+  definition: string
 }
 
 export interface QueryContext {
@@ -33,10 +43,12 @@ export interface QueryContext {
 
 export interface QueryResponse {
   operation: string | null
+  meta_operation?: string | null
   filters: Record<string, unknown> | null
   result: Record<string, unknown> | null
   formatted_answer: string | null
   source: string | null
+  measure?: MeasureMeta | null
   error: string | null
   cached?: boolean
   guard?: GuardReport | null

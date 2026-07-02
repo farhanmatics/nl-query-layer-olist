@@ -1,4 +1,4 @@
-import { QueryResponse, GuardReport } from '../api'
+import { MeasureMeta, QueryResponse, GuardReport } from '../api'
 
 /* ---------- formatting helpers ---------- */
 
@@ -8,6 +8,8 @@ const str = (v: unknown): string => (v == null ? '' : String(v))
 const fmtInt = (v: unknown) => num(v).toLocaleString('en-US')
 const fmtBRL = (v: unknown) =>
   num(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 2 })
+const fmtPct = (v: unknown) =>
+  `${num(v).toLocaleString('en-US', { maximumFractionDigits: 1 })}%`
 
 const fmtDate = (iso: unknown) => {
   const s = str(iso)
@@ -19,6 +21,16 @@ const fmtDate = (iso: unknown) => {
 const fmtDateRange = (range: unknown) => {
   if (!Array.isArray(range) || range.length < 2) return str(range)
   return `${fmtDate(range[0])} – ${fmtDate(range[1])}`
+}
+
+const COUNT_UNITS: Record<string, string> = {
+  count_products: 'products in catalog',
+  count_orders: 'orders',
+  count_by_category: 'orders',
+  count_by_status: 'orders',
+  count_by_payment_type: 'orders',
+  count_low_reviews: 'low reviews',
+  late_deliveries: 'late deliveries',
 }
 
 /* ---------- root ---------- */
@@ -33,18 +45,36 @@ export function ResultCard({ response }: { response: QueryResponse }) {
   let body: React.ReactNode = null
 
   if (op === 'get_order_status') body = <OrderDetail result={result} />
-  else if (op === 'count_orders') body = <StatCard value={fmtInt(result.count)} unit={num(result.count) === 1 ? 'order' : 'orders'} />
-  else if (op === 'count_low_reviews')
-    body = <StatCard value={fmtInt(result.count)} unit="low reviews" tone="rose" />
-  else if (op === 'get_revenue') body = <RevenueView result={result} />
-  else if (op === 'top_products') body = <TopProducts result={result} />
+  else if (result.on_time_pct != null) body = <OnTimeRate result={result} />
+  else if (result.avg_days != null) body = <StatCard value={String(result.avg_days)} unit="avg delivery days" />
+  else if (result.count != null && typeof result.count === 'number')
+    body = (
+      <StatCard
+        value={fmtInt(result.count)}
+        unit={COUNT_UNITS[op ?? ''] ?? (num(result.count) === 1 ? 'result' : 'results')}
+        tone={op === 'count_low_reviews' ? 'rose' : 'brand'}
+      />
+    )
+  else if (Array.isArray(result.comparison)) body = <ComparisonTable result={result} />
+  else if (Array.isArray(result.breakdown)) body = <BreakdownView result={result} op={op} />
+  else if (op === 'get_revenue' || (result.revenue != null && !result.products)) body = <RevenueView result={result} />
+  else if (op === 'top_products' || Array.isArray(result.products)) body = <TopProducts result={result} />
   else if (op === 'list_orders') body = <OrdersTable result={result} />
+  else if (op === 'run_readonly_sql' && Array.isArray(result.rows)) body = <SqlRowsTable result={result} />
   else body = <pre className="overflow-x-auto rounded-lg bg-inset p-3 text-xs text-muted">{JSON.stringify(result, null, 2)}</pre>
 
   return (
     <div className="mt-2.5 max-w-xl overflow-hidden rounded-xl border border-line bg-surface shadow-soft">
       <div className="p-4">{body}</div>
-      <CardFooter filters={filters} source={response.source} guard={response.guard} cached={response.cached} />
+      <CardFooter
+        filters={filters}
+        source={response.source}
+        guard={response.guard}
+        cached={response.cached}
+        measure={response.measure}
+        metaOperation={response.meta_operation}
+        operation={op}
+      />
     </div>
   )
 }
@@ -56,9 +86,21 @@ function StatCard({ value, unit, tone = 'brand' }: { value: string; unit: string
     tone === 'rose' ? 'text-rose-600 dark:text-rose-400' : 'text-brand-600 dark:text-brand-400'
   return (
     <div className="py-2 text-center">
-      {/* tabular-nums: digits align on a fixed grid so big counts read precise */}
       <div className={`text-5xl font-bold tracking-tight tabular-nums ${color}`}>{value}</div>
       <div className="mt-1 text-sm font-medium text-muted">{unit}</div>
+    </div>
+  )
+}
+
+function OnTimeRate({ result }: { result: Record<string, unknown> }) {
+  return (
+    <div className="py-2 text-center">
+      <div className="text-5xl font-bold tracking-tight tabular-nums text-brand-600 dark:text-brand-400">
+        {fmtPct(result.on_time_pct)}
+      </div>
+      <div className="mt-1 text-sm font-medium text-muted">
+        on-time delivery ({fmtInt(result.on_time_count)} of {fmtInt(result.delivered_count)} delivered)
+      </div>
     </div>
   )
 }
@@ -81,6 +123,19 @@ function RevenueView({ result }: { result: Record<string, unknown> }) {
 function TopProducts({ result }: { result: Record<string, unknown> }) {
   const by = str(result.by) || 'count'
   const products = (result.products as Array<Record<string, unknown>>) || []
+  if (products.length === 1) {
+    const p = products[0]
+    return (
+      <div className="py-1 text-center">
+        <div className="text-[11px] uppercase tracking-wide text-muted">Top product by {by === 'revenue' ? 'revenue' : 'units'}</div>
+        <div className="mt-1 truncate font-mono text-sm text-content">{str(p.product_id)}</div>
+        {p.category && <div className="mt-0.5 text-xs text-muted">{str(p.category)}</div>}
+        <div className="mt-2 text-3xl font-bold tabular-nums text-brand-600 dark:text-brand-400">
+          {by === 'revenue' ? fmtBRL(p.value) : fmtInt(p.value)}
+        </div>
+      </div>
+    )
+  }
   const rows = products.map(p => ({
     label: str(p.category) || str(p.product_id).slice(0, 10),
     value: num(p.value),
@@ -89,6 +144,103 @@ function TopProducts({ result }: { result: Record<string, unknown> }) {
     <div>
       <SectionLabel>Top {rows.length} products by {by === 'revenue' ? 'revenue' : 'units sold'}</SectionLabel>
       <BarList rows={rows} format={by === 'revenue' ? fmtBRL : fmtInt} ranked />
+    </div>
+  )
+}
+
+function BreakdownView({ result, op }: { result: Record<string, unknown>; op: string | null }) {
+  const breakdown = (result.breakdown as Array<Record<string, unknown>>) || []
+  const labelKey =
+    breakdown[0]?.status != null
+      ? 'status'
+      : breakdown[0]?.score != null
+        ? 'score'
+        : breakdown[0]?.payment_type != null
+          ? 'payment_type'
+          : breakdown[0]?.state != null
+            ? 'state'
+            : 'label'
+  const valueKey = breakdown[0]?.revenue != null ? 'revenue' : 'count'
+  const title =
+    op === 'fulfillment_status_breakdown'
+      ? 'Orders by status'
+      : op === 'payment_type_breakdown'
+        ? 'Payment mix'
+        : op === 'review_score_distribution'
+          ? 'Reviews by score'
+          : 'Breakdown'
+  const rows = breakdown.map(r => ({
+    label: str(r[labelKey]) || '—',
+    value: num(r[valueKey]),
+  }))
+  return (
+    <div>
+      <SectionLabel>{title}</SectionLabel>
+      <BarList rows={rows} format={valueKey === 'revenue' ? fmtBRL : fmtInt} ranked />
+    </div>
+  )
+}
+
+function ComparisonTable({ result }: { result: Record<string, unknown> }) {
+  const rows = (result.comparison as Array<Record<string, unknown>>) || []
+  const dimKey = rows[0]?.state != null ? 'state' : rows[0]?.category != null ? 'category' : 'seller_id'
+  return (
+    <div>
+      <SectionLabel>Comparison</SectionLabel>
+      <div className="-mx-1 mt-1 overflow-x-auto">
+        <table className="w-full text-left text-xs">
+          <thead className="text-muted">
+            <tr className="border-b border-line">
+              <th className="px-2 py-1.5 font-medium">{dimKey.replace('_', ' ')}</th>
+              <th className="px-2 py-1.5 font-medium">Orders</th>
+              <th className="px-2 py-1.5 font-medium">Revenue</th>
+              <th className="px-2 py-1.5 font-medium">Avg rating</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={i} className="border-b border-line/60 last:border-0">
+                <td className="px-2 py-1.5 font-medium text-content">{str(r[dimKey]).toUpperCase()}</td>
+                <td className="px-2 py-1.5 tabular-nums">{fmtInt(r.orders)}</td>
+                <td className="px-2 py-1.5 tabular-nums">{fmtBRL(r.revenue)}</td>
+                <td className="px-2 py-1.5 tabular-nums">{r.avg_rating != null ? num(r.avg_rating).toFixed(2) : '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+function SqlRowsTable({ result }: { result: Record<string, unknown> }) {
+  const rows = (result.rows as Array<Record<string, unknown>>) || []
+  const columns = (result.columns as string[]) || (rows[0] ? Object.keys(rows[0]) : [])
+  return (
+    <div>
+      <SectionLabel>{fmtInt(result.row_count ?? rows.length)} row(s)</SectionLabel>
+      <div className="-mx-1 mt-1 overflow-x-auto">
+        <table className="w-full text-left text-xs">
+          <thead className="text-muted">
+            <tr className="border-b border-line">
+              {columns.map(c => (
+                <th key={c} className="px-2 py-1.5 font-medium">{c}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={i} className="border-b border-line/60 last:border-0">
+                {columns.map(c => (
+                  <td key={c} className="px-2 py-1.5 tabular-nums text-content">
+                    {str(r[c])}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }
@@ -237,15 +389,21 @@ function CardFooter({
   source,
   guard,
   cached,
+  measure,
+  metaOperation,
+  operation,
 }: {
   filters: Record<string, unknown>
   source: string | null
   guard?: GuardReport | null
   cached?: boolean
+  measure?: MeasureMeta | null
+  metaOperation?: string | null
+  operation?: string | null
 }) {
   const chips = buildFilterChips(filters)
   const guarded = guard?.applied && guard.applied.length > 0
-  const hasFooter = chips.length > 0 || source || guarded || cached
+  const hasFooter = chips.length > 0 || source || guarded || cached || measure || metaOperation
   if (!hasFooter) return null
 
   return (
@@ -260,6 +418,17 @@ function CardFooter({
               {c}
             </span>
           ))}
+        </div>
+      )}
+
+      {measure && (
+        <div className="text-[11px] text-muted" title={measure.definition}>
+          <span className="font-medium text-content">Measure:</span> {measure.definition}
+          {metaOperation && operation && metaOperation !== operation && (
+            <span className="ml-1.5 text-muted">
+              ({metaOperation} → {operation})
+            </span>
+          )}
         </div>
       )}
 

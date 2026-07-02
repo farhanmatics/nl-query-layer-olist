@@ -63,7 +63,11 @@ def _maybe_repair_or_flag(
 
 
 def check_filter_faithfulness(
-    question: str, supported_params: set, args: dict, known_cities: set
+    question: str,
+    supported_params: set,
+    args: dict,
+    known_cities: set,
+    tool_name: str = "",
 ) -> dict:
     """Detect filters present in the question but missing from the model's args.
 
@@ -93,9 +97,29 @@ def check_filter_faithfulness(
     # startup.
     cities = known_cities if known_cities else None
 
+    # Metrics that only consider delivered orders internally — "delivered" in
+    # the question is definitional, not an order_status filter.
+    _status_skip_tools = frozenset({
+        "on_time_delivery_rate",
+        "average_delivery_days",
+        "late_deliveries",
+    })
+    status_val = (
+        None
+        if tool_name in _status_skip_tools
+        else detect_status(question)
+    )
+
+    state_val = detect_state(question)
+    compare_values = args.get("states") or args.get("categories") or args.get("seller_ids")
+    if state_val and compare_values:
+        normalized = {str(v).upper() for v in compare_values}
+        if str(state_val).upper() in normalized:
+            state_val = None
+
     _maybe_repair_or_flag(
         args, repairs, applied, unresolved, supported_params,
-        "state", detect_state(question), "state",
+        "state", state_val, "state",
     )
     _maybe_repair_or_flag(
         args, repairs, applied, unresolved, supported_params,
@@ -109,7 +133,7 @@ def check_filter_faithfulness(
     )
     _maybe_repair_or_flag(
         args, repairs, applied, unresolved, supported_params,
-        "status", detect_status(question), "status",
+        "status", status_val, "status",
     )
     _maybe_repair_or_flag(
         args, repairs, applied, unresolved, supported_params,

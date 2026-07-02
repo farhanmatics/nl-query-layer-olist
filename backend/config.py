@@ -109,6 +109,13 @@ class Settings(BaseSettings):
     argon2_memory_cost: int = 65536  # 64 MiB
     argon2_parallelism: int = 1
 
+    # Meta-tool layer (P0): LLM sees ~7 shapes; backend routes to internal functions.
+    meta_tools_enabled: bool = False
+
+    # Phase 4 — fenced read-only SQL escape hatch (meta-tool: query).
+    sql_escape_enabled: bool = False
+    sql_escape_max_limit: int = 100
+
     class Config:
         env_file = str(_ENV_FILE)
         case_sensitive = False

@@ -66,6 +66,7 @@ def all_factories() -> tuple:
         make_top_sellers,
     )
     from functions.top_products import make_top_products
+    from functions.sql_escape import make_run_readonly_sql
 
     return (
         # Original MVP (6)
@@ -120,4 +121,6 @@ def all_factories() -> tuple:
         make_category_comparison,
         make_state_comparison,
         make_payment_type_breakdown,
+        # Phase 4 — SQL escape hatch
+        make_run_readonly_sql,
     )

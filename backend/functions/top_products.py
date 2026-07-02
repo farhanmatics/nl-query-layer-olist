@@ -29,6 +29,10 @@ SCHEMA = {
             },
             "limit": {"type": "integer", "description": "Number of products to return (default 10, clamped to 1..25)"},
             "by": {"type": "string", "description": "Ranking measure: 'count' (units sold) or 'revenue' (sum of price + freight)"},
+            "category": {
+                "type": "string",
+                "description": "Optional product category (Portuguese or English), e.g. 'perfumaria', 'health_beauty'",
+            },
         },
         "required": [],
     },
@@ -53,6 +57,7 @@ def make_top_products(cfg: SchemaConfig) -> dict:
         date_token: Optional[str] = None,
         limit: int = 10,
         by: str = "count",
+        category: Optional[str] = None,
     ) -> dict:
         filters = {}
 
@@ -64,6 +69,11 @@ def make_top_products(cfg: SchemaConfig) -> dict:
         limit = int(limit)
         limit = max(1, min(25, limit))
         filters["limit"] = limit
+
+        normalized_category = None
+        if category:
+            normalized_category = str(category).lower().strip().replace("_", " ")
+            filters["category"] = normalized_category
 
         date_range = None
         if date_token:
@@ -93,6 +103,16 @@ def make_top_products(cfg: SchemaConfig) -> dict:
         )
 
         params = []
+
+        if normalized_category:
+            params.append(normalized_category)
+            i = len(params)
+            params.append(normalized_category)
+            j = len(params)
+            query += (
+                f" AND (lower(t.{col_name(col_cat_en)}) = ${i} "
+                f"OR lower(p.{col_name(col_cat_pt)}) = ${j})"
+            )
 
         if date_range:
             query += f" AND o.{col_name(col_purchase)} >= ${len(params) + 1}"

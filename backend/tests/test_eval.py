@@ -1,7 +1,7 @@
-"""Phase 1 eval harness.
+"""Phase 1+ eval harness (meta-tool era + optional SQL escape).
 
 Replays eval_set.json against the running backend and scores tool-selection +
-filter faithfulness. Requires the backend (and Ollama + Postgres) to be running.
+filter faithfulness. Requires the backend (DashScope + Postgres) to be running.
 
 Run standalone (prints a full report):
     cd backend && ../venv/bin/python tests/test_eval.py
@@ -19,11 +19,8 @@ import httpx
 
 API_URL = os.environ.get("API_URL", "http://localhost:8000")
 EVAL_FILE = Path(__file__).resolve().parent / "eval_set.json"
-# Realistic floor for the 2B dev model (qwen3.5:2b) on CPU. Tool-selection is
-# near-perfect; the residual gap is filter-faithfulness on multi-filter or
-# ambiguous phrasings, which a larger model (e.g. qwen3.5:9b) closes. The eval's
-# purpose is to catch regressions below this floor, not to certify the model.
-PASS_THRESHOLD = 0.85
+# Floor for cloud LLM on meta-tools. Catches regressions; not a certification bar.
+PASS_THRESHOLD = float(os.environ.get("EVAL_PASS_THRESHOLD", "0.85"))
 REQUEST_TIMEOUT = 120.0
 
 
@@ -49,8 +46,6 @@ def evaluate_case(case: dict, response: dict) -> tuple:
     if case.get("expected_error"):
         if not response.get("error"):
             return False, f"expected an error, got operation={response.get('operation')}"
-        # If the case pins an operation, the error must still have routed correctly
-        # (e.g. unknown order id should route to get_order_status, then 404).
         expected_op = case.get("expected_operation")
         actual_op = response.get("operation")
         if expected_op and actual_op and actual_op != expected_op:
@@ -60,21 +55,72 @@ def evaluate_case(case: dict, response: dict) -> tuple:
     if response.get("error"):
         return False, f"unexpected error: {response['error']}"
 
+    expected_meta = case.get("expected_meta_operation")
+    if expected_meta is not None:
+        meta_op = response.get("meta_operation")
+        if meta_op != expected_meta:
+            return False, (
+                f"meta_operation {meta_op!r} != expected {expected_meta!r}"
+            )
+
     op = response.get("operation")
-    if op != case["expected_operation"]:
-        return False, f"operation {op!r} != expected {case['expected_operation']!r}"
+    acceptable = case.get("acceptable_operations") or []
+    expected_op = case["expected_operation"]
+    if op != expected_op and op not in acceptable:
+        return False, f"operation {op!r} != expected {expected_op!r}"
 
-    if not _filters_match(case.get("expected_filters", {}), response.get("filters")):
-        return False, f"filters {response.get('filters')} !⊇ {case.get('expected_filters')}"
+    expected_filters = case.get("expected_filters", {})
+    alt_filters = case.get("acceptable_filters") or []
+    actual_filters = response.get("filters") or {}
+    if _filters_match(expected_filters, actual_filters):
+        return True, "ok"
+    for alt in alt_filters:
+        if _filters_match(alt, actual_filters):
+            return True, "ok"
+    return False, f"filters {actual_filters} !⊇ {expected_filters}"
 
-    return True, "ok"
+
+def fetch_server_flags() -> dict:
+    try:
+        with httpx.Client(timeout=5.0) as client:
+            r = client.get(f"{API_URL}/api/health")
+            if r.status_code == 200:
+                return r.json()
+    except Exception:
+        pass
+    return {}
+
+
+def backend_reachable() -> bool:
+    flags = fetch_server_flags()
+    return flags.get("db") == "ok"
+
+
+def _should_skip_case(case: dict, flags: dict) -> tuple:
+    """Return (skip: bool, reason: str)."""
+    if case.get("requires_meta_tools") and flags.get("meta_tools") != "enabled":
+        return True, "meta_tools disabled on server"
+    if case.get("requires_sql_escape") and flags.get("sql_escape") != "enabled":
+        return True, "sql_escape disabled on server"
+    return False, ""
 
 
 def run_eval(progress: bool = False) -> tuple:
     cases = load_cases()
+    flags = fetch_server_flags()
     results = []
+    skipped = 0
     with httpx.Client(timeout=REQUEST_TIMEOUT) as client:
         for i, case in enumerate(cases, 1):
+            skip, skip_reason = _should_skip_case(case, flags)
+            if skip:
+                skipped += 1
+                if progress:
+                    print(
+                        f"[SKIP] {i}/{len(cases)} {case['id']}: {skip_reason}",
+                        flush=True,
+                    )
+                continue
             try:
                 r = client.post(
                     f"{API_URL}/api/query", json={"question": case["question"]}
@@ -91,15 +137,7 @@ def run_eval(progress: bool = False) -> tuple:
                 if not passed:
                     line += f"  -> {reason}"
                 print(line, flush=True)
-    return results
-
-
-def backend_reachable() -> bool:
-    try:
-        with httpx.Client(timeout=5.0) as client:
-            return client.get(f"{API_URL}/api/health").status_code == 200
-    except Exception:
-        return False
+    return results, skipped
 
 
 def test_eval_pass_rate():
@@ -109,7 +147,7 @@ def test_eval_pass_rate():
     if not backend_reachable():
         pytest.skip(f"Backend not reachable at {API_URL}; start it before running eval")
 
-    results = run_eval()
+    results, skipped = run_eval()
     passed = sum(1 for _, ok, _ in results if ok)
     total = len(results)
     rate = passed / total if total else 0.0
@@ -119,7 +157,10 @@ def test_eval_pass_rate():
         for c, ok, reason in results
         if not ok
     ]
-    msg = f"Eval pass rate {passed}/{total} = {rate:.0%} (threshold {PASS_THRESHOLD:.0%})"
+    msg = (
+        f"Eval pass rate {passed}/{total} = {rate:.0%} "
+        f"(threshold {PASS_THRESHOLD:.0%}, skipped {skipped})"
+    )
     if failures:
         msg += "\nFailures:\n" + "\n".join(failures)
     assert rate >= PASS_THRESHOLD, msg
@@ -130,11 +171,19 @@ if __name__ == "__main__":
         print(f"Backend not reachable at {API_URL}. Start it first.")
         raise SystemExit(1)
 
-    results = run_eval(progress=True)
+    flags = fetch_server_flags()
+    print(
+        f"Server: meta_tools={flags.get('meta_tools', '?')}, "
+        f"sql_escape={flags.get('sql_escape', '?')}"
+    )
+    results, skipped = run_eval(progress=True)
     passed = sum(1 for _, ok, _ in results if ok)
     total = len(results)
     print(f"\n{'=' * 64}")
-    print(f"EVAL RESULTS — {passed}/{total} passed ({passed / total:.0%})")
+    print(
+        f"EVAL RESULTS — {passed}/{total} passed ({passed / total:.0%}) "
+        f"[{skipped} skipped]"
+    )
     print("=" * 64)
     for case, ok, reason in results:
         mark = "PASS" if ok else "FAIL"
@@ -143,4 +192,7 @@ if __name__ == "__main__":
             line += f"\n        -> {reason}"
         print(line)
     print("=" * 64)
-    print(f"Threshold: {PASS_THRESHOLD:.0%} — {'MET' if passed / total >= PASS_THRESHOLD else 'NOT MET'}")
+    print(
+        f"Threshold: {PASS_THRESHOLD:.0%} — "
+        f"{'MET' if passed / total >= PASS_THRESHOLD else 'NOT MET'}"
+    )

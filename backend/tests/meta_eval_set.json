@@ -1,0 +1,77 @@
+{
+  "description": "Offline meta-tool routing eval. Each case maps a question through meta_router (no LLM). expected_operation is the internal SQL function after routing.",
+  "cases": [
+    {
+      "id": "m01",
+      "question": "How many products do we have in perfumaria?",
+      "meta_tool": "count",
+      "meta_args": {"entity": "products", "category": "perfumaria"},
+      "expected_operation": "count_products",
+      "expected_filters": {"category": "perfumaria"}
+    },
+    {
+      "id": "m02",
+      "question": "How many delivered orders in Sao Paulo last month?",
+      "meta_tool": "count",
+      "meta_args": {"entity": "orders", "city": "sao paulo", "status": "delivered", "date_token": "last_month"},
+      "expected_operation": "count_orders"
+    },
+    {
+      "id": "m03",
+      "question": "Which is the best product in perfumaria last year?",
+      "meta_tool": "rank",
+      "meta_args": {"entity": "products", "category": "perfumaria", "date_token": "last_year", "by": "revenue", "limit": 1},
+      "expected_operation": "top_products",
+      "expected_filters": {"category": "perfumaria", "by": "revenue", "limit": 1}
+    },
+    {
+      "id": "m04",
+      "question": "What was our total revenue last month?",
+      "meta_tool": "sum",
+      "meta_args": {"measure": "revenue", "date_token": "last_month"},
+      "expected_operation": "get_revenue"
+    },
+    {
+      "id": "m05",
+      "question": "Revenue by state this year",
+      "meta_tool": "sum",
+      "meta_args": {"measure": "revenue", "group_by": "state", "date_token": "this_year"},
+      "expected_operation": "revenue_by_state"
+    },
+    {
+      "id": "m06",
+      "question": "Show delivered orders in Sao Paulo",
+      "meta_tool": "list",
+      "meta_args": {"entity": "orders", "city": "sao paulo", "status": "delivered"},
+      "expected_operation": "list_orders"
+    },
+    {
+      "id": "m07",
+      "question": "Break down orders by status",
+      "meta_tool": "breakdown",
+      "meta_args": {"dimension": "order_status"},
+      "expected_operation": "fulfillment_status_breakdown"
+    },
+    {
+      "id": "m08",
+      "question": "Compare SP and RJ",
+      "meta_tool": "compare",
+      "meta_args": {"dimension": "state", "values": ["SP", "RJ"]},
+      "expected_operation": "state_comparison"
+    },
+    {
+      "id": "m09",
+      "question": "What is the status of order abc123?",
+      "meta_tool": "lookup",
+      "meta_args": {"entity": "order", "id": "abc123"},
+      "expected_operation": "get_order_status"
+    },
+    {
+      "id": "m10",
+      "question": "on perfumaria which is the best product for last year",
+      "meta_tool": "rank",
+      "meta_args": {"entity": "products", "category": "perfumaria", "date_token": "last_year", "limit": 1},
+      "expected_operation": "top_products"
+    }
+  ]
+}

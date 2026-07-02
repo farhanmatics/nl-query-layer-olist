@@ -178,6 +178,7 @@ SOURCE_CITATIONS = {
     "category_comparison": "olist_order_items_dataset JOIN olist_products_dataset",
     "state_comparison": "olist_orders_dataset JOIN olist_customers_dataset",
     "payment_type_breakdown": "olist_order_payments_dataset",
+    "run_readonly_sql": "validated read-only SELECT (allowlisted tables)",
 }
 
 PROMPT = PromptConfig(

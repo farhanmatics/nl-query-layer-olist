@@ -45,7 +45,7 @@ async def _persist_turn(
             role="user",
             question=question,
         )
-        op = response.get("operation")
+        op = response.get("meta_operation") or response.get("operation")
         resolved_call = None
         if (
             resolved_args is not None
@@ -131,8 +131,15 @@ async def process_question(
 
         from functions.registry import get_all_schemas
 
-        tool_schemas = get_all_schemas()
-        system_prompt = build_system_prompt(tool_schemas)
+        use_meta = settings.meta_tools_enabled
+        if use_meta:
+            from meta_schemas import get_meta_tool_schemas
+
+            tool_schemas = get_meta_tool_schemas()
+            system_prompt = build_meta_system_prompt(tool_schemas)
+        else:
+            tool_schemas = get_all_schemas()
+            system_prompt = build_system_prompt(tool_schemas)
 
         # Layer 1 cache: reuse a prior translation of this question (no data is
         # cached — the query below still runs against the live DB).
@@ -185,10 +192,40 @@ async def process_question(
             prior = await appdb.get_last_resolved_call(session_id)
         else:
             prior = get_prior_state(session_id)
-        classification = classify_turn(question, candidate.get("tool"))
-        resolved = resolve_call(question, candidate, prior, classification)
-        tool_name = resolved["operation"]
-        args = resolved["args"]
+
+        # Meta-mode: switching tool shape (count → rank) carries filters but does
+        # not lock the user into the prior operation (B0 resolver would).
+        if use_meta and prior and candidate.get("tool"):
+            from meta_router import inherit_meta_filters
+
+            prior_op = prior.get("operation")
+            cand_tool = candidate.get("tool")
+            if prior_op and cand_tool != prior_op:
+                candidate = inherit_meta_filters(prior, candidate)
+                carried = {
+                    k: v
+                    for k, v in (candidate.get("args") or {}).items()
+                    if k in ("category", "city", "state", "date_token", "entity")
+                }
+                resolved = {
+                    "operation": candidate["tool"],
+                    "args": dict(candidate.get("args") or {}),
+                    "context": {
+                        "inherited": bool(carried),
+                        "from_operation": prior_op,
+                        "carried": carried,
+                        "clarify": None,
+                    },
+                }
+            else:
+                classification = classify_turn(question, candidate.get("tool"))
+                resolved = resolve_call(question, candidate, prior, classification)
+        else:
+            classification = classify_turn(question, candidate.get("tool"))
+            resolved = resolve_call(question, candidate, prior, classification)
+
+        meta_tool = resolved["operation"]
+        meta_args = resolved["args"]
         context = resolved["context"]
 
         # Clarify path: the resolver declined (e.g. inherited op can't filter
@@ -214,18 +251,62 @@ async def process_question(
                 await _persist_turn(session_id, user_id, question, response)
             return response
 
+        # Meta-tool layer: map count/lookup shapes → internal executors.
+        tool_name = meta_tool
+        args = meta_args
+        measure_meta = None
+
+        if use_meta and meta_tool:
+            from validation.entity_intent import build_count_clarify, detect_count_ambiguity
+            from meta_router import apply_entity_intent, measure_for_tool, resolve_meta_call
+
+            if meta_tool == "count":
+                meta_args = apply_entity_intent(question, meta_args)
+                if detect_count_ambiguity(question) and not meta_args.get("entity"):
+                    clarify = build_count_clarify(meta_args.get("category"))
+                    logger.info(f"Clarify (entity ambiguity): {clarify['prompt']!r}")
+                    response = {
+                        "operation": None,
+                        "filters": None,
+                        "result": None,
+                        "formatted_answer": None,
+                        "source": None,
+                        "cached": from_cache,
+                        "context": {**context, "clarify": clarify},
+                    }
+                    if durable:
+                        await _persist_turn(session_id, user_id, question, response)
+                    return response
+
+            try:
+                tool_name, args = resolve_meta_call(meta_tool, meta_args, question)
+                logger.info(f"Meta route: {meta_tool} → {tool_name}")
+            except ValueError as e:
+                response = {
+                    "error": str(e),
+                    "operation": meta_tool,
+                    "filters": meta_args,
+                    "result": None,
+                    "formatted_answer": None,
+                    "source": None,
+                    "cached": from_cache,
+                    "context": context,
+                }
+                if durable:
+                    await _persist_turn(session_id, user_id, question, response)
+                return response
+
+            measure_meta = measure_for_tool(tool_name)
+
         # Filter-faithfulness guard: catch filters the model dropped before they
         # turn into a confidently wrong answer (see validation/faithfulness.py).
-        guard = apply_filter_guard(question, tool_name, args)
+        # SQL escape uses its own validator — skip the filter guard.
+        guard = {"applied": [], "unresolved": []}
+        if tool_name != "run_readonly_sql":
+            guard = apply_filter_guard(question, tool_name, args)
         if guard.get("unresolved"):
-            missing = ", ".join(guard["unresolved"])
             response = {
-                "error": (
-                    f"Your question references {missing}, but this type of query "
-                    "can't be filtered by that, so I won't return a number that "
-                    "ignores it. Try rephrasing (e.g. ask for a count or revenue "
-                    "for that location)."
-                ),
+                "error": _build_guard_error(tool_name, guard),
                 "operation": tool_name,
                 "filters": args,
                 "result": None,
@@ -268,14 +349,18 @@ async def process_question(
         # same input-shaped args (date_token, not the resolved date_range) so a
         # follow-up can re-dispatch and the date isn't silently dropped.
         stored_args = {
-            k: v for k, v in (args or {}).items()
+            k: v for k, v in (meta_args if use_meta else args or {}).items()
             if v not in (None, "", [], {})
         }
+        state_operation = meta_tool if use_meta else tool_name
         if durable:
             response = {
                 "operation": tool_name,
+                "meta_operation": meta_tool if use_meta else None,
                 "filters": result.get("filters"),
-                "result": {k: v for k, v in result.items() if k != "filters"},
+                "result": {
+                    k: v for k, v in result.items() if k != "filters"
+                },
                 "formatted_answer": formatted_answer,
                 "source": get_source_citation(tool_name),
                 "error": None,
@@ -283,6 +368,8 @@ async def process_question(
                 "guard": guard,
                 "context": context,
             }
+            if measure_meta:
+                response["measure"] = measure_meta
             await _persist_turn(
                 session_id, user_id, question, response, resolved_args=stored_args
             )
@@ -290,9 +377,10 @@ async def process_question(
         else:
             # B0 ephemeral state store.
             if session_id:
-                store_state(session_id, tool_name, stored_args)
-            return {
+                store_state(session_id, state_operation, stored_args)
+            ephemeral = {
                 "operation": tool_name,
+                "meta_operation": meta_tool if use_meta else None,
                 "filters": result.get("filters"),
                 "result": {k: v for k, v in result.items() if k != "filters"},
                 "formatted_answer": formatted_answer,
@@ -302,6 +390,9 @@ async def process_question(
                 "guard": guard,
                 "context": context,
             }
+            if measure_meta:
+                ephemeral["measure"] = measure_meta
+            return ephemeral
 
     except Exception as e:
         logger.error(f"Orchestration failed: {e}", exc_info=True)
@@ -369,6 +460,71 @@ Now convert the following question. Extract EVERY filter (city, state, status, d
 """
 
 
+def build_meta_system_prompt(tool_schemas: list[dict]) -> str:
+    """System prompt for the meta-tool surface (count, lookup, rank, …, query)."""
+    from meta_schemas import META_FEW_SHOT_EXAMPLES
+    from schemas import get_active_config
+
+    cfg = get_active_config()
+    prompt = cfg.prompt
+    schema_json = json.dumps(tool_schemas, indent=2)
+    examples_text = "\n\n".join(
+        f'Q: "{q}"\nA: {a}' for q, a in META_FEW_SHOT_EXAMPLES
+    )
+    query_note = ""
+    if settings.sql_escape_enabled:
+        allowed = ", ".join(sorted(cfg.tables.values()))
+        query_note = f"""
+CRITICAL — query (SQL escape, last resort only):
+- Use ONLY when count/rank/sum/list/breakdown/compare cannot answer.
+- Emit a single PostgreSQL SELECT with LIMIT (max {settings.sql_escape_max_limit}).
+- Allowlisted tables: {allowed}.
+- Never INSERT/UPDATE/DELETE. Backend rejects unsafe SQL.
+"""
+
+    return f"""You are a data query assistant. Convert the question into ONE meta-tool JSON call.
+The backend maps your call to exact SQL — you only choose the shape and filters.
+
+Dataset: {cfg.display_name}. {prompt.dataset_description}
+
+META-TOOLS (pick exactly one):
+{schema_json}
+
+CRITICAL — count.entity:
+- "products" = rows in the PRODUCT CATALOG (how many SKUs we have).
+- "orders" = distinct ORDERS sold / placed / delivered (transactions).
+- "reviews" = low-scoring reviews.
+- "payments" = payment transactions by type.
+When the user asks "how many products we have" or "in the catalog", entity MUST be "products".
+When they ask about orders sold or placed in a category, entity MUST be "orders".
+
+CRITICAL — rank:
+- Use for "best", "top", "worst", "highest rated".
+- entity=products + by=revenue + limit=1 for "the best product".
+- Always pass category and date_token when mentioned.
+
+CRITICAL — sum / list / breakdown / compare:
+- sum measure=revenue for total revenue; add group_by for "by state/category/month".
+- list entity=orders for order lists; customer_orders needs customer_id.
+- breakdown for histograms (order_status, review_score, payment_type, revenue_state, …).
+- compare with dimension + values array for side-by-side seller/category/state.
+{query_note}
+OUTPUT: ONLY valid JSON with keys "tool" and "args".
+
+DATE TOKENS: today, yesterday, this_week, last_week, this_month, last_month, this_year, last_year
+
+CITY: {prompt.city_rule}
+STATE: {prompt.state_rule}
+STATUS: {prompt.status_rule}
+
+--- EXAMPLES ---
+{examples_text}
+--- END ---
+
+Extract every filter. Do not drop any.
+"""
+
+
 def _extract_json(content: str) -> dict:
     """Best-effort parse of an LLM tool call.
 
@@ -432,6 +588,36 @@ async def call_llm_for_tool(question: str, system_prompt: str) -> dict:
     return {"error": last_error}
 
 
+def _build_guard_error(tool_name: str, guard: dict) -> str:
+    """Human-readable decline when the question names a filter the tool can't use."""
+    unresolved = guard.get("unresolved") or []
+    missing = ", ".join(unresolved)
+    try:
+        from functions.registry import get_function
+
+        desc = get_function(tool_name)["schema"].get("description", tool_name)
+    except Exception:
+        desc = tool_name
+
+    hints: list[str] = []
+    joined = missing.lower()
+    if "city" in joined or "state" in joined:
+        hints.append("order counts or revenue for that location")
+    if "status" in joined:
+        hints.append("a count or list filtered by order status")
+    if "category" in joined:
+        hints.append("product counts in the catalog vs orders by category")
+    if "date" in joined:
+        hints.append("an explicit date range (e.g. last month, 2018)")
+    hint = hints[0] if hints else "a query type that supports those filters"
+
+    return (
+        f"Your question references {missing}, but `{tool_name}` does not support "
+        f"that filter ({desc}). I won't return a number that ignores it — try "
+        f"rephrasing, for example ask for {hint}."
+    )
+
+
 def apply_filter_guard(question: str, tool_name: str, args: dict) -> dict:
     """Run the faithfulness guard for a tool call and repair the args in place.
 
@@ -452,7 +638,7 @@ def apply_filter_guard(question: str, tool_name: str, args: dict) -> dict:
         return {"applied": [], "unresolved": []}
 
     report = check_filter_faithfulness(
-        question, supported, args, get_known_cities()
+        question, supported, args, get_known_cities(), tool_name=tool_name
     )
     if report["repairs"]:
         args.update(report["repairs"])
@@ -501,6 +687,13 @@ def _sanitize_result_for_llm(tool_name: str, result: dict) -> dict:
             "showing": len(orders),
             "offset": result.get("offset", 0),
             "sample": orders[:3],
+        }
+    if tool_name == "run_readonly_sql":
+        rows = result.get("rows") or []
+        return {
+            "columns": result.get("columns", []),
+            "row_count": result.get("row_count", len(rows)),
+            "sample": rows[:5],
         }
     if tool_name == "top_products":
         return {
@@ -596,6 +789,11 @@ def _format_answer_deterministic(tool_name: str, result: dict) -> str:
             f"Showing {len(orders)} of {total:,} matching orders "
             f"(from #{offset + 1}){suffix}."
         )
+
+    elif tool_name == "run_readonly_sql":
+        count = result.get("row_count", 0)
+        cols = result.get("columns") or []
+        return f"Query returned {count} row(s) with columns: {', '.join(cols) or 'none'}."
 
     return "Query executed successfully."
 

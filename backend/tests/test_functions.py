@@ -117,6 +117,14 @@ async def test_count_low_reviews_positive():
     assert result["filters"]["score_max"] == 2
 
 
+async def test_top_products_with_category():
+    execute = _execute(top_products)
+    result = await execute(category="perfumaria", date_token="last_year", limit=1, by="revenue")
+    assert "error" not in result
+    assert len(result["products"]) == 1
+    assert result["filters"]["category"] == "perfumaria"
+
+
 async def test_top_products_count():
     execute = _execute(top_products)
     result = await execute(by="count", limit=5)

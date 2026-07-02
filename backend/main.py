@@ -6,7 +6,7 @@ import logging
 import time
 import uuid
 from collections import defaultdict
-from typing import Optional
+from typing import Optional, Union
 from datetime import datetime
 from validation.cities import load_known_cities
 
@@ -94,9 +94,19 @@ class QueryRequest(BaseModel):
         return v
 
 
+class ClarifyOption(BaseModel):
+    label: str
+    reply: str
+
+
 class ClarifyBlock(BaseModel):
     prompt: str
-    options: list[str]
+    options: list[Union[str, ClarifyOption]]
+
+
+class MeasureBlock(BaseModel):
+    id: str
+    definition: str
 
 
 class QueryContext(BaseModel):
@@ -108,10 +118,12 @@ class QueryContext(BaseModel):
 
 class QueryResponse(BaseModel):
     operation: Optional[str] = None
+    meta_operation: Optional[str] = None
     filters: Optional[dict] = None
     result: Optional[dict] = None
     formatted_answer: Optional[str] = None
     source: Optional[str] = None
+    measure: Optional[MeasureBlock] = None
     error: Optional[str] = None
     cached: bool = False
     guard: Optional[dict] = None
@@ -121,6 +133,8 @@ class QueryResponse(BaseModel):
 class HealthResponse(BaseModel):
     db: str
     llm: str
+    meta_tools: str = "disabled"
+    sql_escape: str = "disabled"
     timestamp: str
 
 
@@ -247,6 +261,8 @@ async def health_check():
     return HealthResponse(
         db="ok" if db_healthy else "error",
         llm="ok" if llm_healthy else "error",
+        meta_tools="enabled" if settings.meta_tools_enabled else "disabled",
+        sql_escape="enabled" if settings.sql_escape_enabled else "disabled",
         timestamp=datetime.utcnow().isoformat(),
     )
 

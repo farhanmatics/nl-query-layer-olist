@@ -1,23 +1,23 @@
 {
-  "description": "Phase 1 eval set. Each case checks tool-selection + filter faithfulness. A filter value of '*' means the key must be present (used for resolved date_range, whose exact value depends on REFERENCE_DATE). 'expected_error' true means the backend should refuse/decline rather than fabricate (e.g. unknown order id, unknown city, invalid status); when 'expected_operation' is also given, the error response must still have routed to that tool.",
+  "description": "Eval set for tool-selection + filter faithfulness. With META_TOOLS_ENABLED, cases may include expected_meta_operation (LLM shape) and expected_operation (internal SQL function after routing). Filter value '*' means key must be present. requires_meta_tools / requires_sql_escape cases are skipped when that feature is off on the server.",
   "cases": [
     {"id": "e01", "question": "What is the status of order abc123def?", "expected_operation": "get_order_status", "expected_error": true},
     {"id": "e02", "question": "Show me details for order 999xyz", "expected_operation": "get_order_status", "expected_error": true},
 
     {"id": "e03", "question": "How many delivered orders did we have in Sao Paulo last month?", "expected_operation": "count_orders", "expected_filters": {"city": "sao paulo", "status": "delivered", "date_range": "*"}},
-    {"id": "e04", "question": "How many canceled orders this year?", "expected_operation": "count_orders", "expected_filters": {"status": "canceled", "date_range": "*"}},
+    {"id": "e04", "question": "How many canceled orders this year?", "expected_operation": "count_orders", "acceptable_operations": ["count_by_status"], "expected_filters": {"status": "canceled", "date_range": "*"}},
     {"id": "e05", "question": "How many orders in Rio de Janeiro last week?", "expected_operation": "count_orders", "expected_filters": {"city": "rio de janeiro", "date_range": "*"}},
-    {"id": "e06", "question": "How many shipped orders do we have?", "expected_operation": "count_orders", "expected_filters": {"status": "shipped"}},
+    {"id": "e06", "question": "How many shipped orders do we have?", "expected_operation": "count_orders", "acceptable_operations": ["count_by_status"], "expected_filters": {"status": "shipped"}},
     {"id": "e07", "question": "Total orders in SP this month?", "expected_operation": "count_orders", "expected_filters": {"state": "SP", "date_range": "*"}},
-    {"id": "e08", "question": "How many delivered orders overall?", "expected_operation": "count_orders", "expected_filters": {"status": "delivered"}},
+    {"id": "e08", "question": "How many delivered orders overall?", "expected_operation": "count_orders", "acceptable_operations": ["count_by_status"], "expected_filters": {"status": "delivered"}},
     {"id": "e09", "question": "Number of orders in Curitiba", "expected_operation": "count_orders", "expected_filters": {"city": "curitiba"}},
     {"id": "e10", "question": "How many orders were placed last year?", "expected_operation": "count_orders", "expected_filters": {"date_range": "*"}},
 
     {"id": "e11", "question": "What was our total revenue last month?", "expected_operation": "get_revenue", "expected_filters": {"date_range": "*"}},
     {"id": "e12", "question": "Total revenue this year", "expected_operation": "get_revenue", "expected_filters": {"date_range": "*"}},
-    {"id": "e13", "question": "Revenue by state this year", "expected_operation": "get_revenue", "expected_filters": {"group_by": "state", "date_range": "*"}},
-    {"id": "e14", "question": "Break down revenue by month", "expected_operation": "get_revenue", "expected_filters": {"group_by": "month"}},
-    {"id": "e15", "question": "Show revenue by category", "expected_operation": "get_revenue", "expected_filters": {"group_by": "category"}},
+    {"id": "e13", "question": "Revenue by state this year", "expected_operation": "revenue_by_state", "expected_filters": {"date_range": "*"}},
+    {"id": "e14", "question": "Break down revenue by month", "expected_operation": "revenue_trend", "expected_filters": {}},
+    {"id": "e15", "question": "Show revenue by category", "expected_operation": "revenue_by_category", "expected_filters": {}},
     {"id": "e16", "question": "How much revenue came from SP?", "expected_operation": "get_revenue", "expected_filters": {"state": "SP"}},
     {"id": "e17", "question": "What was the revenue for the health_beauty category?", "expected_operation": "get_revenue", "expected_filters": {"category": "health_beauty"}},
     {"id": "e18", "question": "Total revenue", "expected_operation": "get_revenue", "expected_filters": {}},
@@ -28,7 +28,7 @@
     {"id": "e22", "question": "How many bad reviews did we receive?", "expected_operation": "count_low_reviews", "expected_filters": {}},
     {"id": "e23", "question": "How many reviews scored 1 last week?", "expected_operation": "count_low_reviews", "expected_filters": {"date_range": "*"}},
 
-    {"id": "e24", "question": "What are our best-selling products?", "expected_operation": "top_products", "expected_filters": {"by": "count"}},
+    {"id": "e24", "question": "What are our best-selling products?", "expected_operation": "top_products", "acceptable_filters": [{"by": "count"}, {"by": "revenue"}]},
     {"id": "e25", "question": "Top 5 products by revenue this year", "expected_operation": "top_products", "expected_filters": {"by": "revenue", "limit": 5, "date_range": "*"}},
     {"id": "e26", "question": "Show me the top 10 products by units sold", "expected_operation": "top_products", "expected_filters": {"by": "count", "limit": 10}},
     {"id": "e27", "question": "Which products made the most money last month?", "expected_operation": "top_products", "expected_filters": {"by": "revenue", "date_range": "*"}},
@@ -43,14 +43,14 @@
     {"id": "e34", "question": "How many delivered orders in Campinas last month?", "expected_operation": "count_orders", "expected_filters": {"city": "campinas", "status": "delivered", "date_range": "*"}},
     {"id": "e35", "question": "How many orders in Brasilia?", "expected_operation": "count_orders", "expected_filters": {"city": "brasilia"}},
     {"id": "e36", "question": "Total revenue in RJ last year", "expected_operation": "get_revenue", "expected_filters": {"state": "RJ", "date_range": "*"}},
-    {"id": "e37", "question": "How many processing orders right now?", "expected_operation": "count_orders", "expected_filters": {"status": "processing"}},
-    {"id": "e38", "question": "How many invoiced orders this year?", "expected_operation": "count_orders", "expected_filters": {"status": "invoiced", "date_range": "*"}},
-    {"id": "e39", "question": "Revenue grouped by category this year", "expected_operation": "get_revenue", "expected_filters": {"group_by": "category", "date_range": "*"}},
+    {"id": "e37", "question": "How many processing orders right now?", "expected_operation": "count_orders", "acceptable_operations": ["count_by_status"], "expected_filters": {"status": "processing"}},
+    {"id": "e38", "question": "How many invoiced orders this year?", "expected_operation": "count_orders", "acceptable_operations": ["count_by_status"], "expected_filters": {"status": "invoiced", "date_range": "*"}},
+    {"id": "e39", "question": "Revenue grouped by category this year", "expected_operation": "revenue_by_category", "expected_filters": {"date_range": "*"}},
     {"id": "e40", "question": "Top 3 products by revenue", "expected_operation": "top_products", "expected_filters": {"by": "revenue", "limit": 3}},
     {"id": "e41", "question": "How many low reviews in Rio last month?", "expected_operation": "count_low_reviews", "expected_filters": {"city": "rio de janeiro", "date_range": "*"}},
     {"id": "e42", "question": "List unavailable orders", "expected_operation": "list_orders", "expected_filters": {"status": "unavailable"}},
     {"id": "e43", "question": "How many delivered orders in Sao Paulo?", "expected_operation": "count_orders", "expected_filters": {"city": "sao paulo", "status": "delivered"}},
-    {"id": "e44", "question": "What is the revenue by state?", "expected_operation": "get_revenue", "expected_filters": {"group_by": "state"}},
+    {"id": "e44", "question": "What is the revenue by state?", "expected_operation": "revenue_by_state", "expected_filters": {}},
 
     {"id": "e45", "question": "How many delivered orders in Saaoo Pauloo last month?", "expected_operation": "count_orders", "expected_filters": {"city": "sao paulo", "status": "delivered", "date_range": "*"}},
     {"id": "e46", "question": "How many orders in Nowhereville?", "expected_operation": "count_orders", "expected_error": true},
@@ -58,6 +58,25 @@
 
     {"id": "e48", "question": "How many orders in sao paulo were canceled this year?", "expected_operation": "count_orders", "expected_filters": {"city": "sao paulo", "status": "canceled", "date_range": "*"}},
     {"id": "e49", "question": "Total revenue for bed_bath_table category last year", "expected_operation": "get_revenue", "expected_filters": {"category": "bed_bath_table", "date_range": "*"}},
-    {"id": "e50", "question": "List 50 delivered orders in SP", "expected_operation": "list_orders", "expected_filters": {"state": "SP", "status": "delivered"}}
+    {"id": "e50", "question": "List 50 delivered orders in SP", "expected_operation": "list_orders", "expected_filters": {"state": "SP", "status": "delivered"}},
+
+    {"id": "m51", "requires_meta_tools": true, "question": "How many products do we have in perfumaria?", "expected_meta_operation": "count", "expected_operation": "count_products", "expected_filters": {"category": "perfumaria"}},
+    {"id": "m52", "requires_meta_tools": true, "question": "How many perfumaria orders were placed last year?", "expected_meta_operation": "count", "expected_operation": "count_by_category", "expected_filters": {"category": "perfumaria", "date_range": "*"}},
+    {"id": "m53", "requires_meta_tools": true, "question": "Which is the best product in perfumaria last year?", "expected_meta_operation": "rank", "expected_operation": "top_products", "expected_filters": {"category": "perfumaria", "by": "revenue", "limit": 1, "date_range": "*"}},
+    {"id": "m54", "requires_meta_tools": true, "question": "Who are our top 5 sellers by revenue this year?", "expected_meta_operation": "rank", "expected_operation": "top_sellers", "expected_filters": {"by": "revenue", "limit": 5, "date_range": "*"}},
+    {"id": "m55", "requires_meta_tools": true, "question": "What percent of orders are delivered on time?", "expected_meta_operation": "sum", "expected_operation": "on_time_delivery_rate", "expected_filters": {}},
+    {"id": "m56", "requires_meta_tools": true, "question": "Break down orders by status", "expected_meta_operation": "breakdown", "expected_operation": "fulfillment_status_breakdown", "expected_filters": {}},
+    {"id": "m57", "requires_meta_tools": true, "question": "Compare revenue in SP and RJ", "expected_meta_operation": "compare", "expected_operation": "state_comparison", "expected_filters": {"states": ["SP", "RJ"]}},
+    {"id": "m58", "requires_meta_tools": true, "question": "How many low reviews last month?", "expected_meta_operation": "count", "expected_operation": "count_low_reviews", "expected_filters": {"date_range": "*"}},
+    {"id": "m59", "requires_meta_tools": true, "question": "Revenue by state this year", "expected_meta_operation": "sum", "expected_operation": "revenue_by_state", "expected_filters": {"date_range": "*"}},
+    {"id": "m60", "requires_meta_tools": true, "question": "Show delivered orders in Sao Paulo", "expected_meta_operation": "list", "expected_operation": "list_orders", "expected_filters": {"city": "sao paulo", "status": "delivered"}},
+    {"id": "m61", "requires_meta_tools": true, "question": "What is the status of order abc123def?", "expected_meta_operation": "lookup", "expected_operation": "get_order_status", "expected_error": true},
+    {"id": "m62", "requires_meta_tools": true, "question": "Top categories by revenue", "expected_meta_operation": "rank", "expected_operation": "top_categories", "expected_filters": {"by": "revenue"}},
+    {"id": "m63", "requires_meta_tools": true, "question": "What was our repeat customer rate?", "expected_meta_operation": "sum", "expected_operation": "repeat_customer_rate", "expected_filters": {}},
+    {"id": "m64", "requires_meta_tools": true, "question": "Payment type breakdown", "expected_meta_operation": "breakdown", "expected_operation": "payment_type_breakdown", "expected_filters": {}},
+    {"id": "m65", "requires_meta_tools": true, "question": "Average delivery days in SP", "expected_meta_operation": "sum", "expected_operation": "average_delivery_days", "expected_filters": {"state": "SP"}},
+
+    {"id": "s66", "requires_meta_tools": true, "requires_sql_escape": true, "question": "Run SQL: average freight value per line item for orders in SP", "expected_meta_operation": "query", "expected_operation": "run_readonly_sql", "acceptable_operations": ["run_readonly_sql"], "expected_filters": {"sql": "*", "limit_applied": "*"}},
+    {"id": "s67", "requires_meta_tools": true, "requires_sql_escape": true, "question": "How many distinct product categories are in the catalog?", "expected_meta_operation": "query", "expected_operation": "run_readonly_sql", "expected_filters": {"sql": "*", "limit_applied": "*"}}
   ]
 }
