@@ -15,6 +15,7 @@ from scripts.export_sft_dataset import (  # noqa: E402
     _internal_case_to_meta,
     collect_records,
     split_records,
+    to_dashscope_record,
 )
 from orchestrator import build_meta_system_prompt  # noqa: E402
 from meta_schemas import get_meta_tool_schemas  # noqa: E402
@@ -43,6 +44,19 @@ def test_collect_records_minimum_size():
         assistant = json.loads(rec["messages"][-1]["content"])
         assert "mode" in assistant
         assert assistant["steps"]
+
+
+def test_dashscope_record_strips_metadata_keys():
+    internal = {
+        "id": "e01",
+        "source": "eval_set",
+        "messages": [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "q"},
+            {"role": "assistant", "content": "{}"},
+        ],
+    }
+    assert to_dashscope_record(internal) == {"messages": internal["messages"]}
 
 
 def test_train_val_split_no_overlap():

@@ -30,7 +30,9 @@ python backend/scripts/submit_finetune_job.py \
 1. Open [Alibaba Cloud Model Studio](https://modelstudio.console.alibabacloud.com/) (DashScope).
 2. Fine-tuning → Create job.
 3. Base model: `qwen3.7-plus`.
-4. Upload train + validation JSONL (chat format: system / user / assistant).
+4. Upload train + validation JSONL. **Each line must be only** `{"messages": [...]}`
+   with roles `system`, `user`, `assistant` — DashScope rejects extra keys like `id`
+   or `source`. Our export script strips those automatically.
 5. Training type: SFT / LoRA (per account availability).
 6. Start job and note the **deployed model ID** when complete.
 

@@ -33,6 +33,12 @@ def _validate_jsonl(path: Path) -> int:
             if not line:
                 continue
             rec = json.loads(line)
+            extra = set(rec.keys()) - {"messages"}
+            if extra:
+                raise ValueError(
+                    f"{path}:{line_no}: unexpected keys {sorted(extra)} "
+                    "(DashScope allows only 'messages' per line)"
+                )
             if "messages" not in rec:
                 raise ValueError(f"{path}:{line_no}: missing messages")
             roles = [m.get("role") for m in rec["messages"]]

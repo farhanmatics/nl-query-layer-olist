@@ -329,11 +329,16 @@ def split_records(records: list[dict], val_fraction: float, seed: int) -> tuple[
     return train, val
 
 
+def to_dashscope_record(record: dict) -> dict:
+    """DashScope SFT accepts only {\"messages\": [...]} per line — no extra keys."""
+    return {"messages": record["messages"]}
+
+
 def write_jsonl(path: Path, records: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
         for rec in records:
-            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            f.write(json.dumps(to_dashscope_record(rec), ensure_ascii=False) + "\n")
 
 
 def main() -> int:
