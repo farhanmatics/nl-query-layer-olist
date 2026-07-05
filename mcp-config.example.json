@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "verifiable-query": {
+      "command": "./venv/bin/python",
+      "args": ["-m", "mcp_server"],
+      "cwd": "./backend",
+      "env": {
+        "META_TOOLS_ENABLED": "true",
+        "PLANNER_ENABLED": "true",
+        "PLANNER_DEMO_FALLBACK": "true"
+      }
+    }
+  }
+}

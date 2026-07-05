@@ -1,4 +1,4 @@
-import { MeasureMeta, QueryResponse, GuardReport } from '../api'
+import { ChainStepTrace, MeasureMeta, QueryResponse, GuardReport } from '../api'
 
 /* ---------- formatting helpers ---------- */
 
@@ -59,12 +59,16 @@ export function ResultCard({ response }: { response: QueryResponse }) {
   else if (Array.isArray(result.breakdown)) body = <BreakdownView result={result} op={op} />
   else if (op === 'get_revenue' || (result.revenue != null && !result.products)) body = <RevenueView result={result} />
   else if (op === 'top_products' || Array.isArray(result.products)) body = <TopProducts result={result} />
+  else if (Array.isArray(result.categories)) body = <TopCategories result={result} />
   else if (op === 'list_orders') body = <OrdersTable result={result} />
   else if (op === 'run_readonly_sql' && Array.isArray(result.rows)) body = <SqlRowsTable result={result} />
   else body = <pre className="overflow-x-auto rounded-lg bg-inset p-3 text-xs text-muted">{JSON.stringify(result, null, 2)}</pre>
 
   return (
     <div className="mt-2.5 max-w-xl overflow-hidden rounded-xl border border-line bg-surface shadow-soft">
+      {response.chain && response.chain.length > 1 && (
+        <ChainTrace chain={response.chain} planMode={response.context?.plan_mode} />
+      )}
       <div className="p-4">{body}</div>
       <CardFooter
         filters={filters}
@@ -118,6 +122,86 @@ function RevenueView({ result }: { result: Record<string, unknown> }) {
     )
   }
   return <StatCard value={fmtBRL(result.revenue)} unit="total revenue" />
+}
+
+function TopCategories({ result }: { result: Record<string, unknown> }) {
+  const by = str(result.by) || 'revenue'
+  const categories = (result.categories as Array<Record<string, unknown>>) || []
+  if (categories.length === 1) {
+    const c = categories[0]
+    return (
+      <div className="py-1 text-center">
+        <div className="text-[11px] uppercase tracking-wide text-muted">Top category by {by}</div>
+        <div className="mt-1 text-lg font-semibold text-content">{str(c.category)}</div>
+        <div className="mt-2 text-3xl font-bold tabular-nums text-brand-600 dark:text-brand-400">
+          {by === 'revenue' ? fmtBRL(c.value) : fmtInt(c.value)}
+        </div>
+      </div>
+    )
+  }
+  const rows = categories.map(c => ({
+    label: str(c.category),
+    value: num(c.value),
+  }))
+  return (
+    <div>
+      <SectionLabel>Top categories by {by === 'revenue' ? 'revenue' : 'units sold'}</SectionLabel>
+      <BarList rows={rows} format={by === 'revenue' ? fmtBRL : fmtInt} ranked />
+    </div>
+  )
+}
+
+function ChainTrace({
+  chain,
+  planMode,
+}: {
+  chain: ChainStepTrace[]
+  planMode?: string | null
+}) {
+  return (
+    <div className="border-b border-line bg-inset/40 px-4 py-3">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+          Planner chain
+        </span>
+        {planMode && (
+          <span className="rounded-md bg-surface px-1.5 py-0.5 text-[10px] font-medium text-muted ring-1 ring-line">
+            {planMode} · {chain.length} steps
+          </span>
+        )}
+      </div>
+      <ol className="space-y-2">
+        {chain.map(step => (
+          <li key={step.step} className="flex gap-2 text-xs">
+            <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-brand-100 text-[10px] font-bold text-brand-700 dark:bg-brand-900/40 dark:text-brand-300">
+              {step.step + 1}
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="font-medium text-content">
+                {step.meta_tool} → {step.operation}
+              </div>
+              <div className="mt-0.5 truncate font-mono text-[10px] text-muted">
+                {summarizeStepResult(step.result)}
+              </div>
+            </div>
+          </li>
+        ))}
+      </ol>
+    </div>
+  )
+}
+
+function summarizeStepResult(result: Record<string, unknown>): string {
+  if (Array.isArray(result.categories) && result.categories[0]) {
+    const c = result.categories[0] as Record<string, unknown>
+    return `category=${c.category}, value=${c.value}`
+  }
+  if (Array.isArray(result.products) && result.products[0]) {
+    const p = result.products[0] as Record<string, unknown>
+    return `product=${p.product_id ?? p.category}, value=${p.value}`
+  }
+  if (result.count != null) return `count=${result.count}`
+  return JSON.stringify(result).slice(0, 80)
 }
 
 function TopProducts({ result }: { result: Record<string, unknown> }) {

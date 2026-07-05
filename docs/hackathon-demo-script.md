@@ -133,7 +133,38 @@ Compare revenue in SP and RJ
 
 ---
 
-## 2:45 – 3:10 | Close — architecture & Qwen role
+## 2:20 – 2:50 | Scene 6 — Planner chain (2-step autopilot)
+
+**Type:**
+
+```
+Top category by revenue last year, then best product in that category
+```
+
+**[Wait for Planner chain trace (2 steps) + top product card]**
+
+**Say:**
+
+> "For compound questions, the **planner** emits a two-step chain: first rank categories, then bind `$step0.category` into a second rank for the best product.  
+> The backend executes each step with the same validation and read-only SQL — Qwen plans, Postgres computes."
+
+**Env for demo:** `PLANNER_ENABLED=true`, `PLANNER_DEMO_FALLBACK=true` (reliable baked-in plan).
+
+---
+
+## 2:50 – 3:10 | Scene 7 — MCP integration (optional B-roll)
+
+**[Screen: Cursor MCP panel or terminal showing MCP tools]**
+
+**Say:**
+
+> "We also expose **MCP tools** — health check, eval summary, and direct `count_orders` — so external agents can call the same verified backend without going through chat."
+
+See [docs/mcp-demo.md](mcp-demo.md).
+
+---
+
+## 3:10 – 3:25 | Close — architecture & Qwen role
 
 **[Screen: HACKATHON.md architecture diagram, or simple slide: User → FastAPI → Postgres + DashScope]**
 
@@ -157,6 +188,7 @@ Compare revenue in SP and RJ
 | Best product follow-up | `Top 5 products by revenue this year` |
 | Returns decline | `How many orders in Nowhereville?` (unknown city) |
 | SQL escape | `How many distinct product categories are in the catalog?` |
+| Planner chain | `Top category by revenue last year, then best product in that category` |
 
 ---
 

@@ -77,6 +77,8 @@
     {"id": "m65", "requires_meta_tools": true, "question": "Average delivery days in SP", "expected_meta_operation": "sum", "expected_operation": "average_delivery_days", "expected_filters": {"state": "SP"}},
 
     {"id": "s66", "requires_meta_tools": true, "requires_sql_escape": true, "question": "Run SQL: average freight value per line item for orders in SP", "expected_meta_operation": "query", "expected_operation": "run_readonly_sql", "acceptable_operations": ["run_readonly_sql"], "expected_filters": {"sql": "*", "limit_applied": "*"}},
-    {"id": "s67", "requires_meta_tools": true, "requires_sql_escape": true, "question": "How many distinct product categories are in the catalog?", "expected_meta_operation": "query", "expected_operation": "run_readonly_sql", "expected_filters": {"sql": "*", "limit_applied": "*"}}
+    {"id": "s67", "requires_meta_tools": true, "requires_sql_escape": true, "question": "How many distinct product categories are in the catalog?", "expected_meta_operation": "query", "expected_operation": "run_readonly_sql", "expected_filters": {"sql": "*", "limit_applied": "*"}},
+
+    {"id": "p68", "requires_meta_tools": true, "requires_planner": true, "question": "Top category by revenue last year, then best product in that category", "expected_meta_operation": "chain", "expected_operation": "top_products", "expected_filters": {"by": "revenue", "limit": 1, "date_range": "*"}}
   ]
 }

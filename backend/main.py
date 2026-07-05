@@ -114,6 +114,17 @@ class QueryContext(BaseModel):
     from_operation: Optional[str] = None
     carried: dict = Field(default_factory=dict)
     clarify: Optional[ClarifyBlock] = None
+    plan_mode: Optional[str] = None
+    steps: Optional[int] = None
+
+
+class ChainStepTrace(BaseModel):
+    step: int
+    meta_tool: str
+    operation: str
+    filters: dict = Field(default_factory=dict)
+    result: dict = Field(default_factory=dict)
+    guard: Optional[dict] = None
 
 
 class QueryResponse(BaseModel):
@@ -128,6 +139,8 @@ class QueryResponse(BaseModel):
     cached: bool = False
     guard: Optional[dict] = None
     context: Optional[QueryContext] = None
+    plan: Optional[dict] = None
+    chain: Optional[list[ChainStepTrace]] = None
 
 
 class HealthResponse(BaseModel):

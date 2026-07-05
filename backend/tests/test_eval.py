@@ -102,6 +102,8 @@ def _should_skip_case(case: dict, flags: dict) -> tuple:
         return True, "meta_tools disabled on server"
     if case.get("requires_sql_escape") and flags.get("sql_escape") != "enabled":
         return True, "sql_escape disabled on server"
+    if case.get("requires_planner") and flags.get("planner") != "enabled":
+        return True, "planner disabled on server"
     return False, ""
 
 

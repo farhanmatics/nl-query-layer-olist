@@ -201,6 +201,8 @@ flowchart LR
 5. **Honest decline** — unknown cities, unsupported concepts (returns/profit), or filters a tool cannot apply.
 6. **SQL escape hatch (Phase 4)** — long-tail `query` meta-tool with SELECT-only fence, allowlisted tables, mandatory LIMIT.
 7. **Audit trail** — every request logged with operation, filters, latency (no secrets).
+8. **Planner chains** — 2-step plans with `$step0.category` bindings; UI shows step trace ([docs/mcp-demo.md](docs/mcp-demo.md)).
+9. **MCP server** — `health_check`, `eval_summary`, `count_orders` tools for external agent integration.
 
 ---
 

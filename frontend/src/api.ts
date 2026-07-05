@@ -39,6 +39,17 @@ export interface QueryContext {
   from_operation?: string | null
   carried: Record<string, unknown>
   clarify?: ClarifyBlock | null
+  plan_mode?: string | null
+  steps?: number | null
+}
+
+export interface ChainStepTrace {
+  step: number
+  meta_tool: string
+  operation: string
+  filters: Record<string, unknown>
+  result: Record<string, unknown>
+  guard?: GuardReport | null
 }
 
 export interface QueryResponse {
@@ -53,6 +64,8 @@ export interface QueryResponse {
   cached?: boolean
   guard?: GuardReport | null
   context?: QueryContext | null
+  plan?: Record<string, unknown> | null
+  chain?: ChainStepTrace[] | null
 }
 
 export interface User {
@@ -185,6 +198,11 @@ export async function query(
 export async function checkHealth(): Promise<{
   db: string
   llm: string
+  llm_model?: string
+  meta_tools?: string
+  sql_escape?: string
+  planner?: string
+  finetuned?: string
   timestamp: string
 }> {
   return request('/api/health', { skipAuthRedirect: true })

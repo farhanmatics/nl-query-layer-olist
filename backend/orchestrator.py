@@ -149,42 +149,55 @@ async def process_question(
         # Layer 1 cache: reuse a prior translation of this question (no data is
         # cached — the query below still runs against the live DB).
         cache_key = translation_key(question, system_prompt)
-        cached_call = (
-            translation_cache.get(cache_key) if settings.llm_cache_enabled else None
-        )
-        if cached_call is not None:
-            from_cache = True
-            tool_call = copy.deepcopy(cached_call)
-            logger.info(f"Translation cache HIT: {question}")
-        else:
-            from_cache = False
-            tool_call = await call_llm_for_tool(question, system_prompt)
-            if use_planner and isinstance(tool_call, dict) and "error" not in tool_call:
-                from planner_schemas import normalize_plan
+        from_cache = False
+        tool_call = None
 
-                plan = normalize_plan(tool_call)
-                if plan.get("error"):
-                    tool_call = plan
-                elif len(plan.get("steps") or []) > 1 or plan.get("mode") == "chain":
-                    chain_response = await _execute_chain_plan(
-                        question, plan, from_cache=from_cache, durable=durable,
-                        session_id=session_id, user_id=user_id,
-                    )
-                    return chain_response
-                else:
-                    step = (plan.get("steps") or [{}])[0]
-                    tool_call = {
-                        "tool": step.get("tool"),
-                        "args": dict(step.get("args") or {}),
-                    }
-            # Only cache a clean, usable tool call — never a transient error.
-            if (
-                settings.llm_cache_enabled
-                and isinstance(tool_call, dict)
-                and "error" not in tool_call
-                and tool_call.get("tool")
-            ):
-                translation_cache.set(cache_key, copy.deepcopy(tool_call))
+        if use_planner and settings.planner_demo_fallback:
+            from planner_schemas import lookup_demo_plan
+
+            demo = lookup_demo_plan(question)
+            if demo:
+                tool_call = copy.deepcopy(demo)
+                logger.info("Planner demo fallback plan for: %s", question)
+
+        if tool_call is None:
+            cached_call = (
+                translation_cache.get(cache_key) if settings.llm_cache_enabled else None
+            )
+            if cached_call is not None:
+                from_cache = True
+                tool_call = copy.deepcopy(cached_call)
+                logger.info(f"Translation cache HIT: {question}")
+            else:
+                tool_call = await call_llm_for_tool(question, system_prompt)
+
+        if use_planner and isinstance(tool_call, dict) and "error" not in tool_call:
+            from planner_schemas import normalize_plan
+
+            plan = normalize_plan(tool_call)
+            if plan.get("error"):
+                tool_call = plan
+            elif len(plan.get("steps") or []) > 1 or plan.get("mode") == "chain":
+                chain_response = await _execute_chain_plan(
+                    question, plan, from_cache=from_cache, durable=durable,
+                    session_id=session_id, user_id=user_id,
+                )
+                return chain_response
+            else:
+                step = (plan.get("steps") or [{}])[0]
+                tool_call = {
+                    "tool": step.get("tool"),
+                    "args": dict(step.get("args") or {}),
+                }
+
+        # Only cache a clean single-step tool call — never a transient error or chain plan.
+        if (
+            settings.llm_cache_enabled
+            and isinstance(tool_call, dict)
+            and "error" not in tool_call
+            and tool_call.get("tool")
+        ):
+            translation_cache.set(cache_key, copy.deepcopy(tool_call))
 
         logger.info(f"LLM selected tool: {tool_call.get('tool')}")
 

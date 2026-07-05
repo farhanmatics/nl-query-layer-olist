@@ -122,6 +122,8 @@ class Settings(BaseSettings):
     # Multi-step planner: LLM emits mode=single|chain with up to planner_max_steps.
     planner_enabled: bool = False
     planner_max_steps: int = 3
+    # When true, exact chain_eval_set questions use baked-in plans (reliable demo).
+    planner_demo_fallback: bool = False
 
     class Config:
         env_file = str(_ENV_FILE)

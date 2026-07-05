@@ -72,7 +72,7 @@ def make_top_products(cfg: SchemaConfig) -> dict:
 
         normalized_category = None
         if category:
-            normalized_category = str(category).lower().strip().replace("_", " ")
+            normalized_category = str(category).lower().strip()
             filters["category"] = normalized_category
 
         date_range = None
