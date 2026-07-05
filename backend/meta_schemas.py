@@ -117,6 +117,7 @@ META_TOOL_SCHEMAS = [
         "name": "list",
         "description": (
             "Paginated list of rows. entity=orders lists matching orders; "
+            "entity=reviews lists low-scoring reviews (use after count_low_reviews); "
             "entity=customer_orders lists orders for one customer (requires customer_id)."
         ),
         "parameters": {
@@ -124,7 +125,7 @@ META_TOOL_SCHEMAS = [
             "properties": {
                 "entity": {
                     "type": "string",
-                    "enum": ["orders", "customer_orders"],
+                    "enum": ["orders", "reviews", "customer_orders"],
                     "description": "What to list (required)",
                 },
                 "customer_id": {"type": "string", "description": "Required when entity=customer_orders"},
@@ -132,6 +133,7 @@ META_TOOL_SCHEMAS = [
                 "state": {"type": "string"},
                 "status": {"type": "string"},
                 "date_token": {"type": "string"},
+                "score_max": {"type": "integer", "description": "Max review score when entity=reviews (default 2)"},
                 "limit": {"type": "integer", "description": "Max rows (default 20, max 50)"},
                 "offset": {"type": "integer", "description": "Pagination offset (default 0)"},
             },
@@ -296,6 +298,14 @@ META_FEW_SHOT_EXAMPLES = (
     (
         "How many low reviews last month?",
         '{"tool": "count", "args": {"entity": "reviews", "date_token": "last_month"}}',
+    ),
+    (
+        "Share me the last 5 low reviews last month",
+        '{"tool": "list", "args": {"entity": "reviews", "date_token": "last_month", "limit": 5}}',
+    ),
+    (
+        "Of those, share me the last five (after a low-reviews count)",
+        '{"tool": "list", "args": {"entity": "reviews", "limit": 5}}',
     ),
     (
         "What is the status of order abc123?",

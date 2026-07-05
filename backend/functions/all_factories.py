@@ -39,6 +39,7 @@ def all_factories() -> tuple:
     )
     from functions.get_order_status import make_get_order_status
     from functions.get_revenue import make_get_revenue
+    from functions.list_low_reviews import make_list_low_reviews
     from functions.list_orders import make_list_orders
     from functions.product_analytics import (
         make_count_products,
@@ -76,6 +77,7 @@ def all_factories() -> tuple:
         make_count_low_reviews,
         make_top_products,
         make_list_orders,
+        make_list_low_reviews,
         # Category A — entity lookups
         make_get_customer_info,
         make_get_product_info,

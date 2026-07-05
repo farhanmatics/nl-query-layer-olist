@@ -2,6 +2,7 @@ import copy
 import json
 import logging
 import asyncio
+import re
 from datetime import datetime
 from typing import Optional
 from config import settings
@@ -232,27 +233,131 @@ async def process_question(
         # Meta-mode: switching tool shape (count → rank) carries filters but does
         # not lock the user into the prior operation (B0 resolver would).
         if use_meta and prior and candidate.get("tool"):
-            from meta_router import inherit_meta_filters
+            from meta_router import (
+                entity_for_op,
+                inherit_meta_filters,
+                resolve_meta_call,
+            )
+            from validation.detectors import contains_deixis_reference
 
             prior_op = prior.get("operation")
             cand_tool = candidate.get("tool")
             if prior_op and cand_tool != prior_op:
-                candidate = inherit_meta_filters(prior, candidate)
-                carried = {
-                    k: v
-                    for k, v in (candidate.get("args") or {}).items()
-                    if k in ("category", "city", "state", "date_token", "entity")
-                }
-                resolved = {
-                    "operation": candidate["tool"],
-                    "args": dict(candidate.get("args") or {}),
-                    "context": {
-                        "inherited": bool(carried),
-                        "from_operation": prior_op,
-                        "carried": carried,
-                        "clarify": None,
-                    },
-                }
+                # Entity coherence guard: don't silently pivot a "reviews" turn
+                # into a "products" answer just because the user said "top 5".
+                # Preview where this candidate would route to and compare
+                # entities. If they differ AND the user used a deictic ("of
+                # that", "those", "them"), preserve the prior entity by
+                # routing to the reviews list; otherwise decline with a
+                # clarify prompt so the wrong answer never lands.
+                prior_entity = entity_for_op(prior_op)
+                try:
+                    preview_tool, _ = resolve_meta_call(
+                        cand_tool, dict(candidate.get("args") or {}), question
+                    )
+                except Exception:
+                    preview_tool = None
+                cand_entity = entity_for_op(preview_tool) if preview_tool else None
+
+                entity_mismatch = (
+                    prior_entity
+                    and cand_entity
+                    and prior_entity != cand_entity
+                )
+                has_deixis = contains_deixis_reference(question) or (
+                    question.strip().lower().startswith("of that")
+                )
+
+                if entity_mismatch and has_deixis and prior_entity == "reviews":
+                    # Rewrite the follow-up to list_reviews with the prior filters.
+                    prior_args = dict(prior.get("args") or {})
+                    rewritten_args = {"entity": "reviews"}
+                    for key in ("city", "state", "date_token", "score_max"):
+                        if prior_args.get(key):
+                            rewritten_args[key] = prior_args[key]
+                    # "last five / first N" → limit
+                    m = re.search(r"\b(?:last|first|top)\s+(\d+)\b", question, re.IGNORECASE)
+                    if m:
+                        rewritten_args["limit"] = int(m.group(1))
+                    elif re.search(r"\blast\s+five\b|\bfirst\s+five\b|\btop\s+five\b", question, re.IGNORECASE):
+                        rewritten_args["limit"] = 5
+                    else:
+                        rewritten_args["limit"] = 5
+                    candidate = {"tool": "list", "args": rewritten_args}
+                    cand_tool = "list"
+                    carried = {
+                        k: v
+                        for k, v in rewritten_args.items()
+                        if k in ("city", "state", "date_token", "score_max", "entity")
+                    }
+                    resolved = {
+                        "operation": "list",
+                        "args": dict(rewritten_args),
+                        "context": {
+                            "inherited": True,
+                            "from_operation": prior_op,
+                            "carried": carried,
+                            "clarify": None,
+                        },
+                    }
+                    logger.info(
+                        "Deixis-aware rewrite: %s → list_low_reviews (prior entity=%s)",
+                        preview_tool,
+                        prior_entity,
+                    )
+                elif entity_mismatch:
+                    # Refuse to silently switch entity — ask.
+                    clarify = {
+                        "prompt": (
+                            f"The previous answer was about {prior_entity}. "
+                            f"Your follow-up looks like a {cand_entity} question. "
+                            "Which did you mean?"
+                        ),
+                        "options": [
+                            {
+                                "label": f"stay on {prior_entity}",
+                                "reply": f"share me the last 5 {prior_entity}",
+                            },
+                            {
+                                "label": f"switch to {cand_entity}",
+                                "reply": question,
+                            },
+                        ],
+                    }
+                    logger.info(
+                        "Entity-coherence clarify: prior=%s (%s), candidate=%s (%s)",
+                        prior_op,
+                        prior_entity,
+                        preview_tool,
+                        cand_entity,
+                    )
+                    resolved = {
+                        "operation": None,
+                        "args": {},
+                        "context": {
+                            "inherited": True,
+                            "from_operation": prior_op,
+                            "carried": {},
+                            "clarify": clarify,
+                        },
+                    }
+                else:
+                    candidate = inherit_meta_filters(prior, candidate)
+                    carried = {
+                        k: v
+                        for k, v in (candidate.get("args") or {}).items()
+                        if k in ("category", "city", "state", "date_token", "entity")
+                    }
+                    resolved = {
+                        "operation": candidate["tool"],
+                        "args": dict(candidate.get("args") or {}),
+                        "context": {
+                            "inherited": bool(carried),
+                            "from_operation": prior_op,
+                            "carried": carried,
+                            "clarify": None,
+                        },
+                    }
             else:
                 classification = classify_turn(question, candidate.get("tool"))
                 resolved = resolve_call(question, candidate, prior, classification)

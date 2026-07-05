@@ -189,6 +189,7 @@ See [docs/mcp-demo.md](mcp-demo.md).
 | Returns decline | `How many orders in Nowhereville?` (unknown city) |
 | SQL escape | `How many distinct product categories are in the catalog?` |
 | Planner chain | `Top category by revenue last year, then best product in that category` |
+| Deixis follow-up | Ask `How many low reviews did we get last month?` then `of that share me the last 5` — should return a 5-row review table, not a product ranking. |
 
 ---
 

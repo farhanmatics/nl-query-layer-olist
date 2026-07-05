@@ -142,6 +142,7 @@ SOURCE_CITATIONS = {
     "count_low_reviews": "olist_order_reviews_dataset JOIN olist_orders_dataset",
     "top_products": "olist_order_items_dataset JOIN olist_products_dataset",
     "list_orders": "olist_orders_dataset JOIN olist_customers_dataset",
+    "list_low_reviews": "olist_order_reviews_dataset JOIN olist_orders_dataset JOIN olist_customers_dataset",
     "get_customer_info": "olist_customers_dataset JOIN olist_orders_dataset JOIN olist_order_payments_dataset",
     "get_product_info": "olist_products_dataset JOIN olist_order_items_dataset",
     "get_seller_info": "olist_sellers_dataset JOIN olist_order_items_dataset",

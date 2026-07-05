@@ -91,6 +91,6 @@ async def test_catalog_tool_executes(tool_name):
         assert isinstance(result["error"], str)
 
 
-def test_catalog_has_43_tools():
+def test_catalog_has_44_tools():
   reg = _build_registry()
-  assert len(reg) == 43
+  assert len(reg) == 44

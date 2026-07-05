@@ -15,6 +15,65 @@ _WORST_RE = re.compile(r"\b(worst|bottom|lowest)\b", re.IGNORECASE)
 # Shared filter keys carried across meta-tool turns (e.g. count → rank).
 _META_CARRY_KEYS = ("category", "city", "state", "date_token", "seller_id", "entity")
 
+# Semantic entity per internal tool. Used by the cross-shape guard so a
+# "reviews" turn cannot silently pivot to a "products" or "orders" answer
+# just because the follow-up phrasing was ambiguous. Keep in sync with new
+# tools; missing entries default to None (no coherence check).
+_OP_ENTITY: dict[str, str] = {
+    # reviews
+    "count_low_reviews": "reviews",
+    "list_low_reviews": "reviews",
+    "review_score_distribution": "reviews",
+    "review_sentiment_trend": "reviews",
+    "products_by_rating": "reviews",
+    "average_rating_by_category": "reviews",
+    "average_rating_by_product": "reviews",
+    "average_rating_by_seller": "reviews",
+    # orders
+    "count_orders": "orders",
+    "count_by_status": "orders",
+    "count_by_category": "orders",
+    "count_by_payment_type": "orders",
+    "list_orders": "orders",
+    "customer_order_history": "orders",
+    "get_order_status": "orders",
+    "fulfillment_status_breakdown": "orders",
+    "on_time_delivery_rate": "orders",
+    "average_delivery_days": "orders",
+    "late_deliveries": "orders",
+    # products / catalog / rankings
+    "count_products": "products",
+    "top_products": "products",
+    "top_categories": "products",
+    "get_product_info": "products",
+    # revenue / payments
+    "get_revenue": "revenue",
+    "revenue_by_state": "revenue",
+    "revenue_by_category": "revenue",
+    "revenue_by_seller": "revenue",
+    "revenue_by_payment_type": "revenue",
+    "revenue_trend": "revenue",
+    "payment_type_breakdown": "revenue",
+    # sellers / customers
+    "top_sellers": "sellers",
+    "seller_metrics": "sellers",
+    "seller_concentration": "sellers",
+    "sellers_by_state": "sellers",
+    "get_seller_info": "sellers",
+    "customer_lifetime_value": "customers",
+    "repeat_customer_rate": "customers",
+    "customers_by_city": "customers",
+    "customer_cohort_analysis": "customers",
+    "get_customer_info": "customers",
+}
+
+
+def entity_for_op(internal_tool: str) -> Optional[str]:
+    """Return the semantic entity for an internal tool, or None if unknown."""
+    if not internal_tool:
+        return None
+    return _OP_ENTITY.get(internal_tool)
+
 _LOOKUP_MAP = {
     "order": ("get_order_status", {"order_id": "id"}),
     "customer": ("get_customer_info", {"customer_id": "id"}),
@@ -94,6 +153,10 @@ MEASURE_DEFINITIONS: dict[str, tuple[str, str]] = {
         "Revenue share of top-10 sellers",
     ),
     "list_orders": ("order_list", "Paginated list of orders matching filters"),
+    "list_low_reviews": (
+        "review_list",
+        "Paginated list of low-scoring reviews (score <= threshold)",
+    ),
     "customer_order_history": (
         "customer_order_list",
         "Paginated orders for one customer",
@@ -324,6 +387,13 @@ def _resolve_list(args: dict) -> tuple[str, dict]:
         return "customer_order_history", _pick(
             args, "customer_id", "limit", "offset"
         )
+    if entity == "reviews":
+        internal_args = _pick(
+            args, "city", "date_token", "score_max", "limit", "offset"
+        )
+        if "score_max" not in internal_args:
+            internal_args["score_max"] = 2
+        return "list_low_reviews", internal_args
     return "list_orders", _pick(
         args, "city", "state", "status", "date_token", "limit", "offset"
     )

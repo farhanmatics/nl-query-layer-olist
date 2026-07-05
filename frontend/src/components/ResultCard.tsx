@@ -61,6 +61,7 @@ export function ResultCard({ response }: { response: QueryResponse }) {
   else if (op === 'top_products' || Array.isArray(result.products)) body = <TopProducts result={result} />
   else if (Array.isArray(result.categories)) body = <TopCategories result={result} />
   else if (op === 'list_orders') body = <OrdersTable result={result} />
+  else if (op === 'list_low_reviews' || Array.isArray(result.reviews)) body = <ReviewsTable result={result} />
   else if (op === 'run_readonly_sql' && Array.isArray(result.rows)) body = <SqlRowsTable result={result} />
   else body = <pre className="overflow-x-auto rounded-lg bg-inset p-3 text-xs text-muted">{JSON.stringify(result, null, 2)}</pre>
 
@@ -358,6 +359,50 @@ function OrdersTable({ result }: { result: Record<string, unknown> }) {
                   {str(o.customer_city) || '—'}{o.customer_state ? `, ${str(o.customer_state).toUpperCase()}` : ''}
                 </td>
                 <td className="px-2 py-1.5 text-muted">{fmtDate(o.order_purchase_timestamp)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+function ReviewsTable({ result }: { result: Record<string, unknown> }) {
+  const reviews = (result.reviews as Array<Record<string, unknown>>) || []
+  const total = num(result.total_count)
+  const offset = num(result.offset)
+  return (
+    <div>
+      <SectionLabel>
+        Showing {reviews.length} of {fmtInt(total)} low reviews
+        {total > reviews.length ? ` (from #${offset + 1})` : ''}
+      </SectionLabel>
+      <div className="-mx-1 mt-1 overflow-x-auto">
+        <table className="w-full text-left text-xs">
+          <thead className="text-muted">
+            <tr className="border-b border-line">
+              <th className="px-2 py-1.5 font-medium">Review</th>
+              <th className="px-2 py-1.5 font-medium">Score</th>
+              <th className="px-2 py-1.5 font-medium">Order</th>
+              <th className="px-2 py-1.5 font-medium">Location</th>
+              <th className="px-2 py-1.5 font-medium">Reviewed</th>
+            </tr>
+          </thead>
+          <tbody>
+            {reviews.map((r, i) => (
+              <tr key={i} className="border-b border-line/60 last:border-0">
+                <td className="px-2 py-1.5 font-mono text-muted">{str(r.review_id).slice(0, 8)}…</td>
+                <td className="px-2 py-1.5">
+                  <span className="inline-flex items-center rounded-md bg-rose-50 px-1.5 py-0.5 text-[11px] font-semibold text-rose-700 ring-1 ring-rose-200">
+                    {str(r.review_score)}★
+                  </span>
+                </td>
+                <td className="px-2 py-1.5 font-mono text-muted">{str(r.order_id).slice(0, 8)}…</td>
+                <td className="px-2 py-1.5 text-content">
+                  {str(r.customer_city) || '—'}{r.customer_state ? `, ${str(r.customer_state).toUpperCase()}` : ''}
+                </td>
+                <td className="px-2 py-1.5 text-muted">{fmtDate(r.review_creation_date)}</td>
               </tr>
             ))}
           </tbody>

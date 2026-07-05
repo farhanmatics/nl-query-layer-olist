@@ -37,6 +37,7 @@ function prettyOp(op: string): string {
     get_revenue: 'revenue',
     top_products: 'top products',
     list_orders: 'order list',
+    list_low_reviews: 'low reviews list',
     get_order_status: 'order status',
   }
   return map[op] || op.replace(/_/g, ' ')
