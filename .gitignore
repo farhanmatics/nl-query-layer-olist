@@ -44,6 +44,11 @@ yarn-error.log
 # IDE
 .vscode/
 .idea/
+.claude/
+.cursor/
+.qodo/
+CLAUDE.md
+claude.md
 *.swp
 *.swo
 *~
