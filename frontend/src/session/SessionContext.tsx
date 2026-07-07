@@ -19,6 +19,7 @@ import {
 } from '../api'
 import { useAuth } from '../auth/AuthContext'
 import { deriveTitle } from '../utils/title'
+import { newLocalId } from '../utils/id'
 
 /**
  * F1: durable conversations owned by the authed user. One source of
@@ -90,9 +91,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       .then(rows => {
         if (!active) return
         setSessions(rows)
-        // Auto-select the most recent session (sidebar's "active row").
+        // Auto-select the most recent session unless the user already picked
+        // one (e.g. created a new chat while the list was still loading).
         if (rows.length > 0) {
-          setActiveId(rows[0].id)
+          setActiveId(prev => prev ?? rows[0].id)
         }
       })
       .catch(() => {
@@ -124,7 +126,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     apiListMessages(activeId)
       .then(rows => {
         if (!active) return
-        setMessages(rows)
+        // Keep optimistic local turns if a fetch races with an in-flight query.
+        setMessages(prev => {
+          const pending = prev.filter(m => m.id.startsWith('local-'))
+          if (pending.length === 0) return rows
+          return [...rows, ...pending]
+        })
       })
       .catch(() => {
         if (!active) return
@@ -179,7 +186,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       setMessages(prev => [
         ...prev,
         {
-          id: `local-${crypto.randomUUID()}`,
+          id: newLocalId(),
           role: 'user',
           question,
           response: null,
@@ -204,7 +211,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       setMessages(prev => [
         ...prev,
         {
-          id: `local-${crypto.randomUUID()}`,
+          id: newLocalId(),
           role: 'assistant',
           question: null,
           response,

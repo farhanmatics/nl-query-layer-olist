@@ -3,6 +3,7 @@ import { ProtectedRoute } from './auth/ProtectedRoute'
 import { LoginPage } from './pages/LoginPage'
 import { RegisterPage } from './pages/RegisterPage'
 import { ChatPage } from './pages/ChatPage'
+import { ErrorBoundary } from './components/ErrorBoundary'
 
 /**
  * Route table (F0). All real UI lives behind a ProtectedRoute so the
@@ -18,7 +19,9 @@ function App() {
         path="/*"
         element={
           <ProtectedRoute>
-            <ChatPage />
+            <ErrorBoundary>
+              <ChatPage />
+            </ErrorBoundary>
           </ProtectedRoute>
         }
       />

@@ -29,6 +29,7 @@ systemctl enable nlq-backend
 systemctl restart nlq-backend
 
 echo "==> Installing nginx site..."
+mkdir -p /var/www/certbot
 cp deploy/nginx-nlq.conf /etc/nginx/sites-available/nlq
 ln -sf /etc/nginx/sites-available/nlq /etc/nginx/sites-enabled/nlq
 rm -f /etc/nginx/sites-enabled/default
@@ -42,4 +43,5 @@ echo "  systemctl status nlq-backend --no-pager"
 echo "  systemctl status nginx --no-pager"
 echo "  curl -s http://127.0.0.1/api/health | python3 -m json.tool"
 echo ""
-echo "Open in browser: http://$(curl -s ifconfig.me 2>/dev/null || echo YOUR_ECS_IP)/"
+echo "Open in browser: http://nlquery.yydigi.top/ (after DNS A record is set)"
+echo "Then HTTPS:      sudo bash deploy/setup-ssl.sh you@email.com"

@@ -1,78 +1,78 @@
-# ECS bare-metal deploy (systemd + nginx)
+# ECS bare-metal deploy (systemd + nginx + HTTPS)
 
-Single Ubuntu ECS instance: Postgres on localhost, FastAPI via systemd, React static build via nginx.
+Single Ubuntu ECS instance: Postgres on localhost, FastAPI via systemd, React via nginx.
+
+**Production URL:** https://nlquery.yydigi.top
 
 ## Prerequisites
 
 - Repo at `/opt/nlq`
-- Python venv at `/opt/nlq/venv` with deps installed
-- `.env` at `/opt/nlq/.env` with working `DB_URL` (include port, e.g. `:5533`)
-- Olist database loaded + `nlq_readonly` role
+- Python venv + `.env` with working `DB_URL` (port `:5533`)
+- Olist loaded + `nlq_readonly` role
+- DNS **A record:** `nlquery.yydigi.top` → ECS public IP
 
-### `.env` for HTTP demo (no TLS yet)
+## Security group (Alibaba)
 
-```env
-DB_URL=postgresql://nlq_readonly:changeme@localhost:5533/olist
-DASHSCOPE_API_KEY=sk-...
-DASHSCOPE_MODEL=qwen3.6-flash
-META_TOOLS_ENABLED=true
-ALLOWED_ORIGINS=http://47.88.23.2
-ENVIRONMENT=development
-COOKIE_SECURE=false
-```
+| Port | Source | Purpose |
+|------|--------|---------|
+| 443 | 0.0.0.0/0 | HTTPS demo (judges / public) |
+| 80 | 0.0.0.0/0 | HTTP redirect + Let's Encrypt validation |
+| 22 | your IP | SSH |
+| 8000 | **closed** | Backend localhost-only |
+| 5533 | **closed** | Postgres localhost-only |
 
-Use `ENVIRONMENT=development` until HTTPS is configured (production boot requires `COOKIE_SECURE=true`).
-
-## One-shot install
+## Step 1 — systemd + nginx (HTTP)
 
 ```bash
 cd /opt/nlq
-git pull   # get deploy/ files
+git pull
 sudo bash deploy/setup-systemd-nginx.sh
 ```
 
-Edit `deploy/nginx-nlq.conf` `server_name` if your IP differs, before running the script.
+Or manually copy `deploy/nginx-nlq.conf` and build frontend (see below).
 
-## Manual steps
-
-### systemd backend
+## Step 2 — HTTPS (Let's Encrypt)
 
 ```bash
-sudo cp deploy/nlq-backend.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable nlq-backend
-sudo systemctl start nlq-backend
-sudo systemctl status nlq-backend
+sudo bash deploy/setup-ssl.sh you@email.com
 ```
 
-Backend binds **127.0.0.1:8000** only — nginx proxies public traffic.
+Certbot installs the cert and configures nginx to redirect HTTP → HTTPS.
 
-### nginx + frontend
+## Step 3 — production `.env`
 
 ```bash
-cd /opt/nlq/frontend && npm ci && npm run build
+openssl rand -hex 32   # paste into SESSION_SECRET
+nano /opt/nlq/.env
+```
 
-sudo cp deploy/nginx-nlq.conf /etc/nginx/sites-available/nlq
-sudo ln -sf /etc/nginx/sites-available/nlq /etc/nginx/sites-enabled/nlq
-sudo rm -f /etc/nginx/sites-enabled/default
-sudo nginx -t && sudo systemctl reload nginx
+Use `deploy/env.production.example` as a template:
+
+```env
+ALLOWED_ORIGINS=https://nlquery.yydigi.top
+ENVIRONMENT=production
+COOKIE_SECURE=true
+SESSION_SECRET=<output of openssl rand -hex 32>
+```
+
+```bash
+sudo systemctl restart nlq-backend
 ```
 
 ## Verify
 
 ```bash
-curl http://127.0.0.1/api/health
-curl http://127.0.0.1/api/query -H 'Content-Type: application/json' \
-  -d '{"question":"How many delivered orders in Sao Paulo last month?"}'
+curl -s https://nlquery.yydigi.top/api/health | python3 -m json.tool
 ```
 
-Browser: `http://<ECS_PUBLIC_IP>/`
+Browser: https://nlquery.yydigi.top/
 
 ## Logs
 
 ```bash
 journalctl -u nlq-backend -f
-tail -f /var/log/nginx/error.log
+sudo tail -f /var/log/nginx/error.log
+sudo certbot certificates
 ```
 
 ## After code changes
@@ -85,11 +85,20 @@ sudo systemctl restart nlq-backend
 sudo systemctl reload nginx
 ```
 
-## Security group
+## Troubleshooting SSL
 
-| Port | Source | Purpose |
-|------|--------|---------|
-| 80 | your IP or 0.0.0.0/0 | Web UI + API via nginx |
-| 22 | your IP | SSH |
-| 8000 | **close** | Backend is localhost-only |
-| 5533 | **close after migration** | Postgres admin |
+| Problem | Fix |
+|---------|-----|
+| certbot connection refused | Open port 80 to 0.0.0.0/0 in security group |
+| DNS problem | Wait for A record propagation; `dig nlquery.yydigi.top` |
+| 502 Bad Gateway | `systemctl status nlq-backend` — backend down |
+| CORS / cookie errors | `ALLOWED_ORIGINS` must match `https://nlquery.yydigi.top` exactly |
+| Production boot fails | Set `SESSION_SECRET` and `COOKIE_SECURE=true` |
+
+## Certificate renewal
+
+Certbot auto-renewal via systemd timer. Test with:
+
+```bash
+sudo certbot renew --dry-run
+```
