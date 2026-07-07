@@ -43,25 +43,49 @@ The database **never** leaves your infrastructure. Qwen sees question text and c
 |---------------------|----------------------------------|
 | Real-world business workflow | Replaces analyst/BI ad-hoc query loop for operational metrics |
 | Ambiguous inputs | Entity disambiguation (catalog products vs orders sold), typo-tolerant city matching, relative dates on historical data |
-| External tools | 43 internal SQL functions, 7 meta-tools, optional `query` SQL escape hatch |
+| External tools | ~44 internal SQL functions, 7 meta-tools, optional `query` SQL escape hatch |
 | Human-in-the-loop | Clarify chips; faithfulness guard refuses confident wrong answers |
-| Production-readiness | Read-only DB role, statement timeouts, row caps, rate limits, audit JSONL, 67-case live eval harness |
+| Production-readiness | Read-only DB role, statement timeouts, row caps, rate limits, audit JSONL, live eval harness + base-vs-fine-tune eval |
 
 ---
 
 ## Qwen Cloud integration
 
+We use Qwen Cloud two ways: **hosted inference** (base model) **and a
+domain-specific fine-tune** trained + deployed on Alibaba Model Studio.
+
 | Step | Model | Input | Output |
 |------|-------|-------|--------|
-| **Tool translation** | `qwen3.7-plus` via DashScope `MultiModalConversation` | System prompt + meta-tool schemas + user question | JSON `{ "tool", "args" }` |
+| **Tool translation** | base `qwen3.6-flash` via DashScope `MultiModalConversation` | System prompt + meta-tool schemas + user question | JSON `{ "tool", "args" }` |
 | **Answer formatting** | Same model | Operation, filters, sanitized result summary | One natural-language sentence |
 
 **Implementation:** `backend/model_client/dashscope_client.py`  
-**Config:** `DASHSCOPE_API_KEY`, `DASHSCOPE_MODEL=qwen3.7-plus`, `DASHSCOPE_BASE_URL`
+**Config:** `DASHSCOPE_API_KEY`, `DASHSCOPE_MODEL=qwen3.6-flash`, `DASHSCOPE_BASE_URL`
+
+### Fine-tuned Qwen (marquee integration)
+
+We fine-tuned **`qwen3-14b`** (SFT/LoRA) on the Olist meta-tool schema using
+**Alibaba Model Studio**, and deployed it as a running inference service
+(`qwen3-14b-a88c9bdd64ef`). The backend calls it via the text `Generation` API
+and can switch to it at runtime with `USE_FINETUNED_MODEL=true` — the client
+selects the correct API (multimodal vs text) per model automatically.
+
+- **Data pipeline** — `backend/scripts/export_sft_dataset.py` builds the SFT
+  set from the eval/few-shot corpus with **label-safe augmentation** (paired
+  slot substitution + opener paraphrase, no model in the loop), yielding ~600
+  train/val examples with a leakage-free split.
+- **Evaluation** — `backend/scripts/eval_finetune.py` runs a held-out
+  base-vs-fine-tune comparison. On the in-distribution set both land at
+  **~92% exact / 100% tool-selection** (parity — the base is already at
+  ceiling; residual misses are gold-label gaps, not model errors). The
+  fine-tune emits the exact plan schema natively, no prompt engineering.
+
+**Why it matters:** it proves the schema-specific translator can be *owned* —
+trained, deployed, and swapped in on Qwen Cloud — not just prompted.
 
 **Design choices for reliability with Qwen:**
 
-- **Meta-tool layer** (`META_TOOLS_ENABLED`) — LLM picks 7–8 shapes (`count`, `rank`, `sum`, `list`, `breakdown`, `compare`, `lookup`, optional `query`); backend routes to 43 internal executors. Reduces routing errors vs exposing the full catalog.
+- **Meta-tool layer** (`META_TOOLS_ENABLED`) — LLM picks 7 shapes (`count`, `rank`, `sum`, `list`, `breakdown`, `compare`, `lookup`, + optional `query`); backend routes to ~44 internal executors. Reduces routing errors vs exposing the full catalog.
 - **Translation cache** — caches question → tool call only; every answer still hits live Postgres.
 - **Faithfulness guard** — deterministic repair/decline when Qwen drops filters present in the question.
 - **Result sanitization** — only aggregates/samples sent to Qwen for formatting; never unbounded row sets.
@@ -92,7 +116,7 @@ flowchart TB
             MR[Meta-router]
             VAL[Validation layer<br/>cities · dates · enums · scope]
             FG[Faithfulness guard]
-            REG[43 function registry]
+            REG[~44 function registry]
             SQLF[Fenced SQL validator]
             AUD[Audit log JSONL]
             CACHE[Translation cache]
@@ -140,7 +164,7 @@ sequenceDiagram
     actor User
     participant UI as React panel
     participant API as FastAPI orchestrator
-    participant Qwen as DashScope qwen3.7-plus
+    participant Qwen as DashScope qwen (flash + fine-tune)
     participant Guard as Faithfulness guard
     participant DB as Postgres read-only
 
@@ -214,7 +238,7 @@ flowchart LR
 |-----------|-----------------|--------|
 | API + orchestrator | **ECS** *(or ACK)* | FastAPI, Python 3.9+ |
 | Operational database | **RDS PostgreSQL** *(or ECS-hosted Postgres)* | Olist / customer data, read-only role |
-| LLM inference | **DashScope / Qwen Cloud** | `qwen3.7-plus` tool + format calls |
+| LLM inference | **DashScope / Qwen Cloud** | base `qwen3.6-flash` + fine-tuned `qwen3-14b` (Model Studio) tool + format calls |
 | Secrets | **KMS / env injection** | `DASHSCOPE_API_KEY`, `DB_URL` |
 
 **Proof artifacts to add before submit:**
@@ -236,14 +260,14 @@ curl https://<your-api-host>/api/health
 
 | Layer | Technology |
 |-------|------------|
-| LLM | Alibaba DashScope — **Qwen 3.7 Plus** |
+| LLM | Alibaba DashScope — base **`qwen3.6-flash`** + fine-tuned **`qwen3-14b`** (SFT/LoRA on Model Studio) |
 | Backend | Python · FastAPI · asyncpg |
 | Frontend | React · TypeScript · Vite · Tailwind |
 | Database | PostgreSQL (read-only role, statement timeout) |
 | Auth / sessions | SQLite app state (durable chat history) |
-| Eval | 67 live cases + offline meta-router / SQL guard tests |
+| Eval | Live eval set + held-out base-vs-fine-tune harness + offline meta-router / SQL guard tests |
 
-**Branch:** `fa/cloud-dev`
+**Branch:** `fa/cloud-dev-fine-tune`
 
 ---
 

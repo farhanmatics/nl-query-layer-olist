@@ -10,14 +10,16 @@ This document satisfies the hackathon requirement to demonstrate backend use of 
 
 | Service | Alibaba product | Role in this project |
 |---------|-----------------|----------------------|
-| LLM inference | **DashScope (Qwen Cloud)** | `qwen3.7-plus` — tool translation + answer formatting |
+| LLM inference | **DashScope (Qwen Cloud)** | base `qwen3.6-flash` + fine-tuned `qwen3-14b` — tool translation + answer formatting |
+| Model fine-tuning | **Model Studio** | SFT/LoRA training of `qwen3-14b` on the Olist schema; deployed as inference service `qwen3-14b-a88c9bdd64ef` |
 | Application host | **ECS** *(fill: instance ID)* | FastAPI orchestrator + React static assets (or separate OSS/CDN) |
 | Database | **RDS PostgreSQL** *(fill: instance ID)* | Olist / operational data; `nlq_readonly` role for app |
 | Secrets | Environment variables / **KMS** *(optional)* | `DASHSCOPE_API_KEY`, `DB_URL`, `SESSION_SECRET` |
 
 **Region:** *(e.g. ap-southeast-1)*  
 **ECS instance ID:** `i-xxxxxxxx`  
-**RDS instance ID:** `rm-xxxxxxxx`
+**RDS instance ID:** `rm-xxxxxxxx`  
+**Model Studio fine-tune job:** `ft-202607030621-4254` → deployment `qwen3-14b-a88c9bdd64ef`
 
 ---
 
@@ -28,8 +30,8 @@ This document satisfies the hackathon requirement to demonstrate backend use of 
 The backend calls DashScope via the official Python SDK:
 
 - **File:** [`backend/model_client/dashscope_client.py`](../backend/model_client/dashscope_client.py)
-- **API:** `MultiModalConversation.call` with `response_format: json_object` for tool calls
-- **Config:** `DASHSCOPE_BASE_URL`, `DASHSCOPE_MODEL=qwen3.7-plus`, `DASHSCOPE_API_KEY`
+- **API:** base model via `MultiModalConversation.call`; fine-tuned `qwen3-14b` via `Generation.call` (text). `response_format: json_object` for tool calls.
+- **Config:** `DASHSCOPE_BASE_URL`, `DASHSCOPE_MODEL=qwen3.6-flash`, `DASHSCOPE_FINETUNE_MODEL=qwen3-14b-a88c9bdd64ef`, `USE_FINETUNED_MODEL`, `DASHSCOPE_API_KEY`
 
 ```python
 # Excerpt — DashScope client configuration
@@ -52,8 +54,11 @@ Expected:
 {
   "db": "ok",
   "llm": "ok",
+  "llm_model": "qwen3-14b-a88c9bdd64ef",
   "meta_tools": "enabled",
   "sql_escape": "enabled",
+  "planner": "enabled",
+  "finetuned": "enabled",
   "timestamp": "..."
 }
 ```
@@ -79,7 +84,9 @@ Copy from [`.env.example`](../.env.example). Minimum production set:
 
 ```bash
 DASHSCOPE_API_KEY=<from Model Studio>
-DASHSCOPE_MODEL=qwen3.7-plus
+DASHSCOPE_MODEL=qwen3.6-flash
+DASHSCOPE_FINETUNE_MODEL=qwen3-14b-a88c9bdd64ef  # deployed SFT model on Model Studio
+USE_FINETUNED_MODEL=false  # flip to true to serve the fine-tune
 DASHSCOPE_BASE_URL=https://dashscope-intl.aliyuncs.com/api/v1
 
 DB_URL=postgresql://nlq_readonly:<password>@<rds-host>:5432/olist
@@ -116,7 +123,9 @@ Record ~30–60 seconds showing:
 1. Alibaba Cloud console — ECS instance **Running**
 2. RDS instance **Running** (optional: connection string redacted)
 3. SSH or Cloud Shell on ECS — `curl localhost:8000/api/health`
-4. *(Optional)* Model Studio / DashScope console showing API key region
+4. **Model Studio console** — the fine-tune job `ft-202607030621-4254` and the
+   **Running** deployment `qwen3-14b-a88c9bdd64ef` (proves the Qwen fine-tune)
+5. *(Optional)* DashScope console showing API key region
 
 Upload recording to YouTube (unlisted is fine) and link here:
 

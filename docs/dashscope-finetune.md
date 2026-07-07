@@ -1,7 +1,7 @@
 # DashScope fine-tuning (Olist schema pack)
 
 This guide covers Phase B of the fine-tune plan: train a domain-specific
-translator on top of `qwen3.7-plus` using exported SFT data.
+translator on top of `qwen3-14b` using exported SFT data.
 
 ## 1. Export the dataset
 
@@ -29,7 +29,7 @@ python backend/scripts/submit_finetune_job.py \
 
 1. Open [Alibaba Cloud Model Studio](https://modelstudio.console.alibabacloud.com/) (DashScope).
 2. Fine-tuning → Create job.
-3. Base model: `qwen3.7-plus`.
+3. Base model: `qwen3-14b`.
 4. Upload train + validation JSONL. **Each line must be only** `{"messages": [...]}`
    with roles `system`, `user`, `assistant` — DashScope rejects extra keys like `id`
    or `source`. Our export script strips those automatically.
