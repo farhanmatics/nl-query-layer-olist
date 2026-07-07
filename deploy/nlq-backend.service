@@ -1,0 +1,18 @@
+[Unit]
+Description=NLQ FastAPI backend (Verifiable Query)
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/nlq/backend
+EnvironmentFile=/opt/nlq/.env
+ExecStart=/opt/nlq/venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=5
+
+# Hardening (optional on single-tenant demo box)
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
