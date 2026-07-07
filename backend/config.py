@@ -20,10 +20,11 @@ class Settings(BaseSettings):
     db_pool_max: int = 10
     db_statement_timeout: int = 5000
 
-    # DashScope cloud LLM (qwen3.7-plus via MultiModalConversation API).
+    # DashScope cloud LLM. Base is a qwen3.x multimodal-series model called via
+    # MultiModalConversation; the fine-tuned qwen3-14b is text (Generation API).
     dashscope_api_key: str = ""
     dashscope_base_url: str = "https://dashscope-intl.aliyuncs.com/api/v1"
-    dashscope_model: str = "qwen3.7-plus"
+    dashscope_model: str = "qwen3.6-flash"
     # Fine-tuned model ID from DashScope Model Studio (set after SFT job completes).
     dashscope_finetune_model: str = ""
     use_finetuned_model: bool = False

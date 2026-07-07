@@ -46,8 +46,8 @@ Postgres) as a stand-in for a real customer's operational DB. The product is
 ## Architecture
 
 ```
-Web panel  <-->  Backend orchestrator  <-->  Local model (Ollama/vLLM)
-                        |
+Web panel  <-->  Backend orchestrator  <-->  Model (DashScope cloud today;
+                        |                          local Ollama/vLLM as privacy path)
                         v
                   Postgres (read-only role)
 ```
@@ -56,20 +56,29 @@ Web panel  <-->  Backend orchestrator  <-->  Local model (Ollama/vLLM)
 - **Backend orchestrator** — owns tool definitions, the function-calling loop,
   validation, the read-only DB connection, response assembly. All real logic
   lives here.
-- **Local model** — stateless translator, called twice per request (intent in,
-  format out). No DB awareness.
+- **Model** — stateless translator (cloud DashScope today, local Ollama/vLLM as
+  the privacy path), called twice per request (intent in, format out). No DB
+  awareness.
 - **Postgres** — source of truth, reached only via pre-written parameterized
   queries through a read-only role.
 
 ## Tech stack (decisions)
 
-- **DB:** PostgreSQL (already loaded). Add a dedicated read-only role.
-- **Model serving:** Ollama for dev. vLLM later for throughput.
-- **Model:** start with `granite4:3b` (IBM Granite 4 — built for RAG +
-  tool-calling on modest hardware). Alternates: `qwen3.5` (4B/9B) for higher
-  faithfulness if needed. On GPU we can run 9B+; on the 8GB CPU VPS stay ~3-4B.
-- **Backend:** Python + FastAPI (clean fit for tool/validation layer). Node is
-  acceptable if preferred — the design is language-agnostic.
+- **DB:** PostgreSQL (already loaded). Dedicated read-only role in place.
+- **Model serving (current):** Alibaba **DashScope / Model Studio** (cloud).
+  Base translator is `qwen3.6-flash` (multimodal-series → `MultiModalConversation`
+  API). A fine-tuned **`qwen3-14b`** (SFT/LoRA on the Olist meta-tool schema, a
+  *text* model → `Generation` API) is deployed and selectable via
+  `USE_FINETUNED_MODEL`. See `docs/dashscope-finetune.md`,
+  `backend/scripts/export_sft_dataset.py`, `backend/scripts/eval_finetune.py`.
+- **Model serving (privacy path):** the design stays local-capable — swap the
+  DashScope client for Ollama/vLLM (`granite4:3b`, `qwen` 4-9B) with no
+  orchestrator changes, for customers who can't ship any text to the cloud.
+- **Only aggregates leave the box:** on the cloud path, question text + already-
+  aggregated results (counts/sums) are sent for translation/formatting; **raw DB
+  rows never leave the server.**
+- **Backend:** Python + FastAPI (tool schemas, validation, function-calling loop,
+  auth + durable sessions, orchestrator).
 - **Frontend:** simple web chat panel (React or plain HTML/JS).
 - **Deployment:** local VPS for testing → Mac Mini (on-prem) or RunPod
   serverless (cloud, Secure Cloud only) for production, decided per privacy.
@@ -109,27 +118,29 @@ Olist spans **~Sept 2016 to Oct 2018**. `order_purchase_timestamp` is
 (≈ `2018-10-17`) via a configurable reference date, or test with explicit
 ranges. Do not hardcode `now()` for relative-date logic during dev.
 
-## First function library (build these, in order)
+## Function library
 
 Each function = one operation, parameterized. The model only fills arguments.
+The library has grown from the original six seed functions to **~44 registered
+factories** (`backend/functions/`, wired in `functions/all_factories.py`)
+spanning orders, revenue/payments, reviews, products/catalog, sellers,
+customers, and delivery metrics.
 
-1. **`get_order_status(order_id)`** — single lookup. Returns status + key dates
-   for one order. Simplest end-to-end proof.
-2. **`count_orders(city?, state?, status?, date_range?)`** — the flagship
-   pattern. `JOIN customers` for city/state, filter `order_status`, filter
-   `order_purchase_timestamp`. Returns `COUNT(*)`.
-3. **`get_revenue(date_range?, state?, category?, group_by?)`** —
-   `SUM(payment_value)` from payments→orders (→items→products for category).
-4. **`count_low_reviews(score_max=2, city?, date_range?)`** — the "disputes"
-   analog: reviews with `review_score <= score_max` over a window.
-5. **`top_products(date_range?, limit=10, by='count'|'revenue')`** — N-row
-   aggregate; join translation for English category/product names.
-6. **`list_orders(filters, limit=20, offset=0)`** — paginated lookup; never
-   returns unbounded rows.
+**The seed six** (the canonical count / lookup / sum / top-N / list shapes):
+`get_order_status`, `count_orders`, `get_revenue`, `count_low_reviews`,
+`top_products`, `list_orders`.
 
-These six cover the **count / lookup / sum / top-N / list** shapes that absorb
-the large majority of real questions. Add a 7th only when a genuinely new shape
-recurs.
+**Meta-tool layer (`meta_router.py`, `meta_schemas.py`).** Rather than exposing
+44 tools to the model, the orchestrator can present **7 generic shapes** —
+`count`, `rank`, `sum`, `list`, `breakdown`, `compare`, `lookup` (plus a fenced
+`query` for the SQL escape hatch) — parameterized by `entity`/`measure`/
+`dimension`. The router resolves a shape+entity to the concrete internal
+function. This keeps the model's decision space small and is what the fine-tune
+was trained to emit. Gated by `meta_tools_enabled`.
+
+Adding a function = one module in `functions/`, one entry in
+`all_factories.py`, one `SOURCE_CITATIONS` line in the active schema config, and
+(if it introduces a new shape) a meta-tool mapping.
 
 ## Validation rules (backend-owned, pre-query)
 
@@ -153,19 +164,18 @@ structure matters.
 
 ## Roadmap
 
-**Phase 0 — Foundation (prove one path).**
-Read-only role; backend skeleton; Ollama + `granite4:3b`; implement
-`get_order_status` and `count_orders` end-to-end (question → tool call →
-validated read-only query → formatted answer). One working vertical slice.
+**Phase 0 — Foundation.** ✅ *DONE.* Read-only role; backend skeleton;
+`get_order_status` + `count_orders` end-to-end. One working vertical slice.
 
-**Phase 1 — Core function library + panel.**
-Build functions 3–6; the validation layer (city, date, enums); structured JSON
-output; the web chat panel. This is the demoable MVP.
+**Phase 1 — Core function library + panel.** ✅ *DONE.* Seed functions,
+validation layer (city, date, enums), structured JSON output, React chat panel.
 
-**Phase 2 — Hardening + trust.**
-Citations/verification surface; result capping & pagination; statement
-timeouts; request logging; an **eval set** of ~50–100 real questions with
-expected results, run on every change to catch faithfulness regressions.
+**Phase 2 — Hardening + trust.** ✅ *DONE.* Citations/verification surface;
+result capping & pagination; statement timeouts; request logging + audit
+(`audit.py`); LLM/translation caching; an **eval set** (`backend/tests/*.json`)
+run on every change. Also added: auth + durable sessions, conversational
+multi-turn resolution, and faithfulness guards (e.g. the entity-coherence guard
+that refuses to silently pivot a "reviews" turn into a "products" answer).
 
 **Phase 3 — Productization (build-once-sell-many).** ✅ *DONE — see
 `backend/schemas/`. Per-schema config; `SCHEMA_NAME` env var selects
@@ -176,16 +186,32 @@ Adding a new schema = one config module + one entry in
 layer, and orchestrator's system prompt all read from the active
 config — no other code changes needed.*
 
-**Phase 4 — Long tail (only if needed).**
-Fenced generated-SQL escape hatch (read-only role, mandatory LIMIT, timeouts,
-allowlisted tables) for open-ended analytics; optional multi-step/agentic
-orchestration; optional delivery channels (Slack, scheduled digests).
+**Phase 4 — Long tail.** ✅ *Largely DONE (feature-flagged).*
+- Fenced generated-SQL escape hatch (`functions/sql_escape.py`, read-only role,
+  mandatory LIMIT, timeouts, allowlisted tables) — `sql_escape_enabled`.
+- Meta-tool layer (7 generic shapes) — `meta_tools_enabled`.
+- Multi-step/agentic orchestration (`chain_executor.py`, `planner_*`) —
+  `planner_enabled`, `planner_max_steps`.
+- **Model fine-tuning** on the Olist schema (SFT/LoRA on `qwen3-14b` via
+  DashScope) — dataset export + augmentation + base-vs-finetune eval harness.
+- **MCP server** (`backend/mcp_server/`) exposing tools to Cursor/judges.
+- *Remaining/optional:* delivery channels (Slack, scheduled digests).
 
 ## Open questions to resolve as we build
-- Reference-date strategy for relative dates in the historical dataset.
-- Exact JSON response contract between backend and frontend.
+- ~~Reference-date strategy for relative dates in the historical dataset.~~
+  *Resolved: `reference_date` config anchors "today" to the dataset max; the
+  date validator expands tokens against `settings.reference_datetime`.*
+- ~~Exact JSON response contract between backend and frontend.~~ *Resolved:
+  `QueryResponse` (`backend/main.py`) → the frontend `ResultCard` renders
+  number/card/table with the citation surface.*
 - ~~How much per-schema config Phase 3 actually needs.~~ *Resolved
   by the SchemaConfig shape: tables + columns + enums + states + scope
   + prompt. The `tests/test_schemas.py` suite pins the contract.*
+- **Fine-tune value:** on the in-distribution eval the fine-tuned `qwen3-14b`
+  is at *parity* with base `qwen3.6-flash` (both ~92%, misses are gold-label
+  gaps) — base is already at ceiling. A measurable win would require retraining
+  with a minimal system prompt (prompt-compression) or a harder OOD eval. Also:
+  clean the eval gold's systematic omissions (`entity` on rank, `score_max` on
+  reviews) that cap every accuracy number.
 - Target production deployment: on-prem (Mac Mini) vs serverless — gated by the
   customer's data-residency requirements.
