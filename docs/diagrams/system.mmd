@@ -1,0 +1,56 @@
+flowchart TB
+    subgraph Users["Business users"]
+        U[Manager / Ops staff]
+    end
+
+    subgraph Frontend["Web panel — React + Vite"]
+        UI[Chat UI]
+        RC[Result cards + citations]
+        CL[Clarify / HITL chips]
+    end
+
+    subgraph AlibabaCloud["Alibaba Cloud"]
+        subgraph Compute["Compute — ECS / container"]
+            API[FastAPI orchestrator]
+            MR[Meta-router]
+            VAL[Validation layer<br/>cities · dates · enums · scope]
+            FG[Faithfulness guard]
+            REG[~44 function registry]
+            SQLF[Fenced SQL validator]
+            AUD[Audit log JSONL]
+            CACHE[Translation cache]
+        end
+
+        subgraph Data["Data — RDS PostgreSQL"]
+            PG[(Olist / customer DB<br/>read-only role nlq_readonly)]
+        end
+
+        subgraph QwenCloud["Qwen Cloud — DashScope"]
+            Q1[Call 1: question → tool JSON]
+            Q2[Call 2: aggregates → prose]
+        end
+    end
+
+    U --> UI
+    UI -->|POST /api/query| API
+    API --> CACHE
+    API --> VAL
+    API --> FG
+    API --> MR
+    MR --> REG
+    REG -->|parameterized SELECT| PG
+    MR -->|optional query meta-tool| SQLF
+    SQLF -->|validated SELECT only| PG
+    API -->|complete_json| Q1
+    Q1 --> API
+    API -->|complete_text| Q2
+    Q2 --> API
+    API --> AUD
+    API --> RC
+    API --> CL
+    RC --> UI
+    CL --> UI
+
+    style QwenCloud fill:#e8f4fc,stroke:#1677ff
+    style Data fill:#f6ffed,stroke:#52c41a
+    style Compute fill:#fff7e6,stroke:#fa8c16

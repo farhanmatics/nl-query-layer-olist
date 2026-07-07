@@ -1,0 +1,21 @@
+flowchart LR
+    subgraph Never["Qwen never sees"]
+        RAW[Raw table dumps]
+        CREDS[DB credentials]
+        WRITE[Write / DDL paths]
+    end
+
+    subgraph QwenSees["Qwen sees"]
+        Q[Question text]
+        T[Tool schemas]
+        A[Aggregates & samples]
+    end
+
+    subgraph BackendOnly["Backend only"]
+        SQL[All SQL execution]
+        VAL[All validation]
+    end
+
+    RAW -.->|blocked| QwenSees
+    SQL --> BackendOnly
+    VAL --> BackendOnly

@@ -28,23 +28,156 @@ Create the output folder once: `mkdir -p docs/images`
 
 ## Option B — `@mermaid-js/mermaid-cli` (repeatable, CI-friendly)
 
-From the repo root:
+Canonical diagram sources live in **`docs/diagrams/*.mmd`** (kept in sync with the Mermaid blocks in `HACKATHON.md`). A one-command script renders all three PNGs.
+
+### Prerequisites
+
+| Requirement | Notes |
+|-------------|--------|
+| **Node.js 18+** | `node -v` |
+| **Chrome / Chromium** | The script auto-detects macOS Google Chrome or Linux `google-chrome` / `chromium`. Override with `PUPPETEER_EXECUTABLE_PATH=/path/to/chrome`. |
+| **Network (first run only)** | `npm install` downloads `@mermaid-js/mermaid-cli` (~30 MB). Browser download is **not** required if system Chrome is found. |
+
+### Quick export (recommended)
+
+From the **repo root**:
 
 ```bash
-npm install -g @mermaid-js/mermaid-cli   # one-time
+npm install --ignore-scripts   # first time only — skips Puppeteer browser download
+bash scripts/export-mermaid-png.sh
+```
+
+Once `package-lock.json` is committed, CI and teammates can use `npm ci --ignore-scripts` instead.
+
+Outputs:
+
+| Source | PNG |
+|--------|-----|
+| `docs/diagrams/system.mmd` | `docs/images/architecture-system.png` |
+| `docs/diagrams/sequence.mmd` | `docs/images/architecture-sequence.png` |
+| `docs/diagrams/trust-boundary.mmd` | `docs/images/architecture-trust-boundary.png` |
+
+Also write SVG copies:
+
+```bash
+bash scripts/export-mermaid-png.sh --svg
+```
+
+### npm script (optional, pins CLI version)
+
+A root `package.json` pins `@mermaid-js/mermaid-cli@11.4.0` for reproducible CI:
+
+```bash
+npm ci --ignore-scripts
+npm run diagrams:export
+# or
+npm run diagrams:export:svg
+```
+
+Override the CLI version for a single run:
+
+```bash
+MERMAID_CLI_VERSION=11.4.0 bash scripts/export-mermaid-png.sh
+```
+
+### Manual `mmdc` (without the script)
+
+```bash
 mkdir -p docs/images
+npx --yes @mermaid-js/mermaid-cli@11.4.0 \
+  -i docs/diagrams/system.mmd \
+  -o docs/images/architecture-system.png \
+  -b white -w 1920 -H 1080 -s 2 \
+  -p docs/diagrams/puppeteer-config.json
 ```
 
-Save each diagram as a `.mmd` file, then render:
+Repeat for `sequence.mmd` and `trust-boundary.mmd`.
+
+**Flags used by the script**
+
+| Flag | Purpose |
+|------|---------|
+| `-b white` | Slide-friendly background |
+| `-w 1920 -H 1080` | 16:9 canvas |
+| `-s 2` | 2× scale (retina / crisp text) |
+| `-p puppeteer-config.json` | `--no-sandbox` for Docker/CI |
+
+Other useful flags: `-b transparent` for dark slides · `-t dark` for dark theme.
+
+### Edit workflow
+
+1. Edit the `.mmd` file under `docs/diagrams/` (or edit `HACKATHON.md` and copy the block back into the matching `.mmd`).
+2. Re-run `bash scripts/export-mermaid-png.sh`.
+3. Commit **both** the `.mmd` source and the regenerated PNG if you want images in git.
+
+### GitHub Actions (CI)
+
+Add a job that fails if diagrams drift, or uploads PNGs as artifacts:
+
+```yaml
+# .github/workflows/diagrams.yml (example)
+name: Export Mermaid PNGs
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'docs/diagrams/**'
+      - 'HACKATHON.md'
+      - 'scripts/export-mermaid-png.sh'
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - run: npm ci --ignore-scripts
+
+      - name: Install Chromium deps (Linux)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            ca-certificates fonts-liberation libasound2t64 libatk-bridge2.0-0 \
+            libatk1.0-0 libcups2 libdbus-1-3 libdrm2 libgbm1 libgtk-3-0 \
+            libnspr4 libnss3 libx11-xcb1 libxcomposite1 libxdamage1 \
+            libxrandr2 xdg-utils \
+            chromium-browser || sudo apt-get install -y chromium
+
+      - run: npm run diagrams:export
+        env:
+          PUPPETEER_EXECUTABLE_PATH: /usr/bin/chromium-browser
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: architecture-pngs
+          path: docs/images/architecture-*.png
+```
+
+To **verify committed PNGs match sources** (optional strict mode):
 
 ```bash
-# Example after saving diagram 1 to docs/diagrams/system.mmd
-mmdc -i docs/diagrams/system.mmd -o docs/images/architecture-system.png -b white -w 1920 -H 1080
-mmdc -i docs/diagrams/sequence.mmd   -o docs/images/architecture-sequence.png -b white -w 1920 -H 1080
-mmdc -i docs/diagrams/trust.mmd      -o docs/images/architecture-trust-boundary.png -b white -w 1920 -H 1080
+bash scripts/export-mermaid-png.sh
+git diff --exit-code docs/images/
 ```
 
-**Flags:** `-b white` background · `-w`/`-H` size for slide decks · add `-s 2` for retina.
+### Docker / sandboxed Linux
+
+If `mmdc` crashes with sandbox errors, the repo ships `docs/diagrams/puppeteer-config.json` (passed via `-p`). For root inside Docker, that is usually enough.
+
+### Global install (alternative)
+
+```bash
+npm install -g @mermaid-js/mermaid-cli@11.4.0
+mmdc -i docs/diagrams/system.mmd -o docs/images/architecture-system.png -b white -w 1920 -H 1080 -s 2
+```
+
+Prefer **`npx` or `npm run diagrams:export`** so local and CI use the same version.
 
 ---
 
@@ -74,7 +207,9 @@ For a PNG, screenshot the rendered diagram or use Option A/B for a clean export.
   ![System architecture](docs/images/architecture-system.png)
   ```
 
-- Keep sources in git: either the `.mmd` files under `docs/diagrams/` or the Mermaid blocks in `HACKATHON.md` (already there).
+- Keep sources in git: **`docs/diagrams/*.mmd`** (canonical) plus the Mermaid blocks in `HACKATHON.md`.
+- Regenerate PNGs: `npm install --ignore-scripts && bash scripts/export-mermaid-png.sh`
+- Optionally commit PNGs under `docs/images/` for Devpost/slides without re-running the script.
 
 ---
 
@@ -83,8 +218,11 @@ For a PNG, screenshot the rendered diagram or use Option A/B for a clean export.
 | Issue | Fix |
 |-------|-----|
 | `flowchart` syntax error | Ensure first line is `flowchart TB` / `flowchart LR` with no leading spaces inside the fence |
-| Subgraph labels break CLI | Upgrade `mmdc`: `npm update -g @mermaid-js/mermaid-cli` |
-| Text clipped in PNG | Increase `-w` and `-H`, or simplify node labels |
+| Subgraph labels break CLI | Upgrade pinned version: `MERMAID_CLI_VERSION=11.4.0 bash scripts/export-mermaid-png.sh` |
+| `Failed to launch browser` / sandbox | macOS: install Google Chrome, or set `PUPPETEER_EXECUTABLE_PATH`. Linux CI: install `chromium-browser` + apt deps (see Option B). |
+| `Could not find Chrome` | Run `npm install --ignore-scripts` then retry; script auto-detects system Chrome. Or: `npx puppeteer browsers install chrome-headless-shell` |
+| `npm ci` fails (no lockfile) | Use `npm install --ignore-scripts` once, commit `package-lock.json` |
+| Text clipped in PNG | Increase `-w` and `-H` in `scripts/export-mermaid-png.sh`, or simplify node labels |
 | Colors wrong on dark slides | Export with `-b transparent` or edit in Figma/Keynote |
 
 **Single combined slide (optional):** export three PNGs and place them on one 16:9 slide — system diagram on top, sequence + trust boundary side-by-side below.

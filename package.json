@@ -1,0 +1,12 @@
+{
+  "name": "nl-query-layer-olist",
+  "private": true,
+  "description": "Repo-root tooling (diagram export). App deps live in frontend/ and backend/.",
+  "scripts": {
+    "diagrams:export": "bash scripts/export-mermaid-png.sh",
+    "diagrams:export:svg": "bash scripts/export-mermaid-png.sh --svg"
+  },
+  "devDependencies": {
+    "@mermaid-js/mermaid-cli": "11.4.0"
+  }
+}

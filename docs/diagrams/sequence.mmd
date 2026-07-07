@@ -1,0 +1,26 @@
+sequenceDiagram
+    actor User
+    participant UI as React panel
+    participant API as FastAPI orchestrator
+    participant Qwen as DashScope qwen (flash + fine-tune)
+    participant Guard as Faithfulness guard
+    participant DB as Postgres read-only
+
+    User->>UI: Plain-English question
+    UI->>API: POST /api/query
+    API->>Qwen: Tool translation (JSON mode)
+    Qwen-->>API: meta-tool + args
+    API->>API: Meta-router → internal function
+    API->>Guard: Detect missing filters
+    alt Filter unsupported
+        Guard-->>API: Decline with explanation
+        API-->>UI: Error + guard report
+    else OK
+        Guard-->>API: Repaired args
+        API->>DB: Parameterized SQL
+        DB-->>API: Rows / aggregates
+        API->>Qwen: Format answer (summary only)
+        Qwen-->>API: One sentence
+        API-->>UI: operation + result + citation + measure
+    end
+    UI-->>User: Verifiable answer card
