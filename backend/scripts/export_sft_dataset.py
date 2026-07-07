@@ -35,9 +35,10 @@ from meta_schemas import META_FEW_SHOT_EXAMPLES  # noqa: E402
 from orchestrator import build_meta_system_prompt  # noqa: E402
 from meta_schemas import get_meta_tool_schemas  # noqa: E402
 
+# Match date phrases in either spaced ("this year") or tokenized ("this_year")
+# form — questions use spaces, tokens use underscores. Normalize to the token.
 _DATE_TOKEN_RE = re.compile(
-    r"\b(today|yesterday|this_week|last_week|this_month|last_month|"
-    r"this_year|last_year)\b",
+    r"\b(today|yesterday|this[ _](?:week|month|year)|last[ _](?:week|month|year))\b",
     re.I,
 )
 
@@ -166,7 +167,7 @@ def _infer_date_token(question: str, filters: dict) -> Optional[str]:
     if "date_range" not in filters:
         return None
     m = _DATE_TOKEN_RE.search(question)
-    return m.group(1).lower() if m else "last_month"
+    return m.group(1).lower().replace(" ", "_") if m else "last_month"
 
 
 def _filters_to_meta_args(filters: dict, question: str) -> dict:
@@ -319,6 +320,224 @@ def collect_records(system_prompt: str, tests_dir: Path) -> list[dict]:
     return records
 
 
+# ---------------------------------------------------------------------------
+# Label-safe augmentation
+#
+# We multiply the base examples without a model in the loop, so every generated
+# label stays provably correct:
+#   * slot substitution — swap a city/state/date in BOTH the question text and
+#     the typed args together (only applied to single meta-tool records whose
+#     args carry the slot and whose surface form appears in the question);
+#   * opener paraphrase — reword the leading phrase of the question; the label
+#     is untouched, so this is safe for every record type (including chains and
+#     the SQL curriculum, whose labels contain literal hardcoded values).
+# ---------------------------------------------------------------------------
+
+# (display form, canonical arg form) — arg form matches the lowercase,
+# accent-stripped `customer_city` the validation layer normalizes to.
+_CITY_PAIRS: list[tuple[str, str]] = [
+    ("São Paulo", "sao paulo"),
+    ("Rio de Janeiro", "rio de janeiro"),
+    ("Belo Horizonte", "belo horizonte"),
+    ("Brasília", "brasilia"),
+    ("Curitiba", "curitiba"),
+    ("Porto Alegre", "porto alegre"),
+    ("Salvador", "salvador"),
+    ("Campinas", "campinas"),
+    ("Guarulhos", "guarulhos"),
+    ("Fortaleza", "fortaleza"),
+    ("Recife", "recife"),
+    ("Niterói", "niteroi"),
+]
+
+_STATES: list[str] = ["SP", "RJ", "MG", "RS", "PR", "SC", "BA", "DF", "GO", "ES", "CE", "PE"]
+
+_DATE_PAIRS: list[tuple[str, str]] = [
+    ("last month", "last_month"),
+    ("this month", "this_month"),
+    ("last week", "last_week"),
+    ("this week", "this_week"),
+    ("last year", "last_year"),
+    ("this year", "this_year"),
+    ("yesterday", "yesterday"),
+    ("today", "today"),
+]
+
+# Leading-opener synonym groups. Only the first group that prefixes the question
+# is used, and only the leading phrase is rewritten — meaning is preserved.
+_PARAPHRASE_GROUPS: list[list[str]] = [
+    ["how many", "count the number of", "count how many", "what is the number of", "tell me how many"],
+    ["what are the top", "list the top", "show me the top", "which are the top"],
+    ["list", "show me", "give me a list of"],
+    ["show me", "share", "give me"],
+    ["what is", "what's", "tell me"],
+]
+
+
+def _cap(text: str) -> str:
+    return text[:1].upper() + text[1:] if text else text
+
+
+def _swap_surface(text: str, old_forms: list[str], new_display: str) -> tuple[str, bool]:
+    """Replace the first matching surface form (case-insensitive) with new_display."""
+    for form in old_forms:
+        if re.search(re.escape(form), text, re.I):
+            return re.sub(re.escape(form), new_display, text, count=1, flags=re.I), True
+    return text, False
+
+
+def _slot_variants(question: str, args: dict, rng: random.Random, per_slot: int) -> list[tuple[str, dict]]:
+    """Enumerate (question, args) pairs by swapping present city/state/date slots."""
+    variants: list[tuple[str, dict]] = [(question, args)]
+
+    def expand(pairs: list[tuple[str, dict]], swap) -> list[tuple[str, dict]]:
+        out: list[tuple[str, dict]] = []
+        for q, a in pairs:
+            produced = swap(q, a)
+            out.append((q, a))  # keep the un-swapped branch too
+            out.extend(produced)
+        return out
+
+    city = args.get("city")
+    if isinstance(city, str) and city:
+        cur_display = next((d for d, a in _CITY_PAIRS if a == city.lower()), city)
+        alts = [(d, a) for d, a in _CITY_PAIRS if a != city.lower()]
+        rng.shuffle(alts)
+        alts = alts[:per_slot]
+
+        def swap_city(q, a):
+            res = []
+            for disp, argval in alts:
+                nq, ok = _swap_surface(q, [cur_display, city], disp)
+                if ok:
+                    na = dict(a)
+                    na["city"] = argval
+                    res.append((nq, na))
+            return res
+
+        variants = expand(variants, swap_city)
+
+    state = args.get("state")
+    if isinstance(state, str) and re.fullmatch(r"[A-Z]{2}", state or ""):
+        alts_s = [s for s in _STATES if s != state]
+        rng.shuffle(alts_s)
+        alts_s = alts_s[:per_slot]
+
+        def swap_state(q, a):
+            res = []
+            for s in alts_s:
+                if re.search(rf"\b{state}\b", q):
+                    nq = re.sub(rf"\b{state}\b", s, q, count=1)
+                    na = dict(a)
+                    na["state"] = s
+                    res.append((nq, na))
+            return res
+
+        variants = expand(variants, swap_state)
+
+    token = args.get("date_token")
+    if isinstance(token, str) and token:
+        cur_phrase = next((p for p, t in _DATE_PAIRS if t == token), None)
+        if cur_phrase:
+            alts_d = [(p, t) for p, t in _DATE_PAIRS if t != token]
+            rng.shuffle(alts_d)
+            alts_d = alts_d[:per_slot]
+
+            def swap_date(q, a):
+                res = []
+                for phrase, tok in alts_d:
+                    if re.search(re.escape(cur_phrase), q, re.I):
+                        nq = re.sub(re.escape(cur_phrase), phrase, q, count=1, flags=re.I)
+                        na = dict(a)
+                        na["date_token"] = tok
+                        res.append((nq, na))
+                return res
+
+            variants = expand(variants, swap_date)
+
+    # Drop the untouched original; caller re-adds the base record separately.
+    return [(q, a) for (q, a) in variants if (q, a) != (question, args)]
+
+
+def _paraphrase(question: str) -> list[str]:
+    ql = question.lower()
+    for group in _PARAPHRASE_GROUPS:
+        for member in group:
+            if ql.startswith(member):
+                rest = question[len(member):]
+                return [_cap(other + rest) for other in group if other != member]
+    return []
+
+
+def _is_slot_augmentable(assistant: dict) -> bool:
+    """True only for single meta-tool records (not query/chain, whose labels hold literal values)."""
+    if assistant.get("mode") != "single":
+        return False
+    steps = assistant.get("steps") or []
+    if len(steps) != 1:
+        return False
+    return steps[0].get("tool") not in (None, "query")
+
+
+def augment_record(record: dict, rng: random.Random, per_slot: int, max_per_record: int) -> list[dict]:
+    question = record["messages"][1]["content"]
+    assistant = json.loads(record["messages"][2]["content"])
+    system_prompt = record["messages"][0]["content"]
+
+    # Start from slot substitutions (or just the base question if not augmentable).
+    if _is_slot_augmentable(assistant):
+        args = assistant["steps"][0].get("args") or {}
+        pairs = _slot_variants(question, args, rng, per_slot)
+        base_pairs = [(question, args)] + pairs
+    else:
+        base_pairs = [(question, None)]
+
+    seen: set[tuple[str, str]] = {(question, json.dumps(assistant, sort_keys=True))}
+    out: list[dict] = []
+    n = 0
+    for q, args in base_pairs:
+        # Rebuild the assistant label if the args changed.
+        if args is not None:
+            new_assistant = dict(assistant)
+            new_assistant["steps"] = [dict(assistant["steps"][0])]
+            new_assistant["steps"][0]["args"] = args
+        else:
+            new_assistant = assistant
+        for variant_q in [q] + _paraphrase(q):
+            key = (variant_q, json.dumps(new_assistant, sort_keys=True))
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(
+                _record(
+                    record_id=f"{record.get('id', 'aug')}_aug{n:03d}",
+                    question=variant_q,
+                    assistant=new_assistant,
+                    system_prompt=system_prompt,
+                    source=f"{record.get('source', 'base')}_aug",
+                )
+            )
+            n += 1
+    rng.shuffle(out)
+    return out[:max_per_record]
+
+
+def augment_to_target(
+    base: list[dict], target: int, rng: random.Random, per_slot: int, max_per_record: int
+) -> list[dict]:
+    """Return base records plus augmented variants, up to `target` total (leakage-safe within a split)."""
+    result = list(base)
+    pool: list[dict] = []
+    for rec in base:
+        pool.extend(augment_record(rec, rng, per_slot, max_per_record))
+    rng.shuffle(pool)
+    for rec in pool:
+        if len(result) >= target:
+            break
+        result.append(rec)
+    return result
+
+
 def split_records(records: list[dict], val_fraction: float, seed: int) -> tuple[list[dict], list[dict]]:
     rng = random.Random(seed)
     shuffled = list(records)
@@ -347,6 +566,24 @@ def main() -> int:
     parser.add_argument("--out-dir", default="datasets", help="Output directory (default: datasets)")
     parser.add_argument("--val-fraction", type=float, default=0.1, help="Validation holdout fraction")
     parser.add_argument("--seed", type=int, default=42, help="RNG seed for train/val split")
+    parser.add_argument(
+        "--target-size",
+        type=int,
+        default=0,
+        help="Total records to reach via label-safe augmentation (0 = no augmentation)",
+    )
+    parser.add_argument(
+        "--per-slot",
+        type=int,
+        default=4,
+        help="Max alternative values tried per city/state/date slot when augmenting",
+    )
+    parser.add_argument(
+        "--max-per-record",
+        type=int,
+        default=16,
+        help="Cap on augmented variants generated from any single base record",
+    )
     args = parser.parse_args()
 
     tests_dir = _BACKEND / "tests"
@@ -357,7 +594,25 @@ def main() -> int:
         print("No records collected — check eval set paths.", file=sys.stderr)
         return 1
 
+    # Split base records first so augmented variants of a base example can never
+    # straddle the train/val boundary (no near-duplicate leakage).
     train, val = split_records(records, args.val_fraction, args.seed)
+
+    if args.target_size > 0:
+        target_val = max(len(val), int(args.target_size * args.val_fraction))
+        target_train = args.target_size - target_val
+        train = augment_to_target(
+            train, target_train, random.Random(args.seed), args.per_slot, args.max_per_record
+        )
+        val = augment_to_target(
+            val, target_val, random.Random(args.seed + 1), args.per_slot, args.max_per_record
+        )
+        # Two different base records can independently generate the same
+        # paraphrase; drop such collisions from train so no val question leaks.
+        val_questions = {r["messages"][1]["content"] for r in val}
+        train = [r for r in train if r["messages"][1]["content"] not in val_questions]
+        random.Random(args.seed).shuffle(train)
+        random.Random(args.seed + 2).shuffle(val)
     out_dir = _REPO / args.out_dir
     train_path = out_dir / f"{args.schema}_sft_train.jsonl"
     val_path = out_dir / f"{args.schema}_sft_val.jsonl"

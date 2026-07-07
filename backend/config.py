@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     # Fine-tuned model ID from DashScope Model Studio (set after SFT job completes).
     dashscope_finetune_model: str = ""
     use_finetuned_model: bool = False
+    # The base (qwen3.x) models are the multimodal series and must be called via
+    # MultiModalConversation; the fine-tuned qwen3-14b is a text model and must
+    # be called via the text Generation API with plain-string message content.
+    dashscope_base_is_multimodal: bool = True
+    dashscope_finetune_is_multimodal: bool = False
     # Thinking mode is incompatible with JSON structured output for tool calls.
     dashscope_enable_thinking: bool = False
     llm_timeout_seconds: int = 30
@@ -147,6 +152,13 @@ class Settings(BaseSettings):
         if self.use_finetuned_model and self.dashscope_finetune_model.strip():
             return self.dashscope_finetune_model.strip()
         return self.dashscope_model
+
+    @property
+    def active_model_is_multimodal(self) -> bool:
+        """Which DashScope API the active model needs (multimodal vs text)."""
+        if self.use_finetuned_model and self.dashscope_finetune_model.strip():
+            return self.dashscope_finetune_is_multimodal
+        return self.dashscope_base_is_multimodal
 
 
 settings = Settings()

@@ -14,7 +14,7 @@ from typing import Any, Optional
 
 import anyio
 import dashscope
-from dashscope import MultiModalConversation
+from dashscope import Generation, MultiModalConversation
 
 from config import settings
 
@@ -46,6 +46,53 @@ def _text_messages(system: str, user: str) -> list[dict]:
         messages.append({"role": "system", "content": [{"text": system}]})
     messages.append({"role": "user", "content": [{"text": user}]})
     return messages
+
+
+def _plain_messages(system: str, user: str) -> list[dict]:
+    """Build plain-string messages for the text Generation API (fine-tuned model)."""
+    messages: list[dict] = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": user})
+    return messages
+
+
+def raw_complete(
+    *,
+    model: str,
+    system: str,
+    user: str,
+    multimodal: bool,
+    temperature: float = 0,
+    response_format: Optional[dict] = None,
+) -> str:
+    """Low-level synchronous call against an explicit model + API style.
+
+    Shared by the async client and offline tooling (e.g. the base-vs-fine-tune
+    eval harness), so both exercise the exact same request path.
+    """
+    _configure_dashscope()
+    if not settings.dashscope_api_key:
+        raise DashScopeError("DASHSCOPE_API_KEY is not configured")
+
+    kwargs: dict[str, Any] = {
+        "api_key": settings.dashscope_api_key,
+        "model": model,
+        "result_format": "message",
+        "temperature": temperature,
+    }
+    if response_format is not None:
+        kwargs["response_format"] = response_format
+    if not settings.dashscope_enable_thinking:
+        kwargs["enable_thinking"] = False
+
+    if multimodal:
+        kwargs["messages"] = _text_messages(system, user)
+        response = MultiModalConversation.call(**kwargs)
+    else:
+        kwargs["messages"] = _plain_messages(system, user)
+        response = Generation.call(**kwargs)
+    return _extract_text(response)
 
 
 def _extract_text(response: Any) -> str:
@@ -82,24 +129,14 @@ def _sync_call(
     temperature: float,
     response_format: Optional[dict] = None,
 ) -> str:
-    _configure_dashscope()
-    if not settings.dashscope_api_key:
-        raise DashScopeError("DASHSCOPE_API_KEY is not configured")
-
-    kwargs: dict[str, Any] = {
-        "api_key": settings.dashscope_api_key,
-        "model": settings.active_llm_model,
-        "messages": _text_messages(system, user),
-        "result_format": "message",
-        "temperature": temperature,
-    }
-    if response_format is not None:
-        kwargs["response_format"] = response_format
-    if not settings.dashscope_enable_thinking:
-        kwargs["enable_thinking"] = False
-
-    response = MultiModalConversation.call(**kwargs)
-    return _extract_text(response)
+    return raw_complete(
+        model=settings.active_llm_model,
+        system=system,
+        user=user,
+        multimodal=settings.active_model_is_multimodal,
+        temperature=temperature,
+        response_format=response_format,
+    )
 
 
 class DashScopeClient:
