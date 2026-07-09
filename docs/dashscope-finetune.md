@@ -6,18 +6,29 @@ translator on top of `qwen3-14b` using exported SFT data.
 ## 1. Export the dataset
 
 ```bash
-cd backend
-python scripts/export_sft_dataset.py
+# Full system prompt (~3k tokens) — matches production meta prompt
+python backend/scripts/export_sft_dataset.py --target-size 600
+
+# Minimal system prompt (<100 tokens) — fine-tune v2 / prompt-compression
+python backend/scripts/export_sft_dataset.py --system-mode minimal --target-size 600
 ```
 
 Outputs:
 
-- `datasets/olist_sft_train.jsonl` (~90% of examples)
-- `datasets/olist_sft_val.jsonl` (~10% holdout)
+- `datasets/olist_sft_train.jsonl` / `_val.jsonl` — full prompt
+- `datasets/olist_sft_train_min.jsonl` / `_val_min.jsonl` — minimal prompt
+
+Validate before upload:
+
+```bash
+python backend/scripts/submit_finetune_job.py \
+  --train datasets/olist_sft_train_min.jsonl \
+  --val datasets/olist_sft_val_min.jsonl
+```
 
 Schema pack metadata: [`backend/schemas/olist/pack.json`](../backend/schemas/olist/pack.json).
 
-## 2. Validate before upload
+## 2. Validate before upload (full prompt)
 
 ```bash
 python backend/scripts/submit_finetune_job.py \

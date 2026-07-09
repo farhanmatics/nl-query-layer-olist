@@ -6,6 +6,8 @@
   "finetune_model_id": null,
   "sft_train": "datasets/olist_sft_train.jsonl",
   "sft_val": "datasets/olist_sft_val.jsonl",
+  "sft_train_min": "datasets/olist_sft_train_min.jsonl",
+  "sft_val_min": "datasets/olist_sft_val_min.jsonl",
   "eval_sets": [
     "backend/tests/eval_set.json",
     "backend/tests/meta_eval_set.json",

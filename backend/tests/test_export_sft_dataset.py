@@ -12,10 +12,15 @@ if str(_BACKEND) not in sys.path:
     sys.path.insert(0, str(_BACKEND))
 
 from scripts.export_sft_dataset import (  # noqa: E402
+    MINIMAL_SYSTEM_PROMPT,
     _internal_case_to_meta,
+    approx_token_count,
     collect_records,
+    resolve_system_prompt,
     split_records,
     to_dashscope_record,
+    train_val_filenames,
+    validate_export,
 )
 from orchestrator import build_meta_system_prompt  # noqa: E402
 from meta_schemas import get_meta_tool_schemas  # noqa: E402
@@ -67,3 +72,51 @@ def test_train_val_split_no_overlap():
     assert not train_ids & val_ids
     assert len(val) >= 1
     assert len(train) + len(val) == 20
+
+
+def test_minimal_system_prompt_under_100_tokens():
+    assert approx_token_count(MINIMAL_SYSTEM_PROMPT) <= 100
+    prompt = resolve_system_prompt("minimal")
+    assert prompt == MINIMAL_SYSTEM_PROMPT
+    assert "count" in prompt and "rank" in prompt
+
+
+def test_resolve_system_mode_full_is_long():
+    full = resolve_system_prompt("full")
+    assert approx_token_count(full) > 500
+
+
+def test_train_val_filenames_minimal_suffix():
+    assert train_val_filenames("olist", "full") == (
+        "olist_sft_train.jsonl",
+        "olist_sft_val.jsonl",
+    )
+    assert train_val_filenames("olist", "minimal") == (
+        "olist_sft_train_min.jsonl",
+        "olist_sft_val_min.jsonl",
+    )
+
+
+def test_validate_export_rejects_question_overlap():
+    prompt = MINIMAL_SYSTEM_PROMPT
+    rec = {
+        "messages": [
+            {"role": "system", "content": prompt},
+            {"role": "user", "content": "How many orders?"},
+            {
+                "role": "assistant",
+                "content": json.dumps(
+                    {"mode": "single", "steps": [{"kind": "meta", "tool": "count", "args": {}}]}
+                ),
+            },
+        ]
+    }
+    with pytest.raises(ValueError, match="overlap"):
+        validate_export([rec], [rec], prompt, "minimal")
+
+
+def test_collect_records_with_minimal_prompt():
+    tests_dir = _BACKEND / "tests"
+    records = collect_records(MINIMAL_SYSTEM_PROMPT, tests_dir)
+    assert len(records) >= 50
+    assert all(r["messages"][0]["content"] == MINIMAL_SYSTEM_PROMPT for r in records)

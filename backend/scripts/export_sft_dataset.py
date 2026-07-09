@@ -9,12 +9,15 @@ Merges:
   - SQL escape curriculum examples
 
 Outputs (per schema pack):
-  datasets/<schema>_sft_train.jsonl  — 90% holdout split
-  datasets/<schema>_sft_val.jsonl    — 10% validation (no train leakage)
+  datasets/<schema>_sft_train.jsonl       — 90% holdout (full system prompt)
+  datasets/<schema>_sft_val.jsonl         — 10% validation (no train leakage)
+  datasets/<schema>_sft_train_min.jsonl   — same split with --system-mode minimal
+  datasets/<schema>_sft_val_min.jsonl
 
 Run from repo root:
   python backend/scripts/export_sft_dataset.py
   python backend/scripts/export_sft_dataset.py --schema olist --out-dir datasets
+  python backend/scripts/export_sft_dataset.py --system-mode minimal --target-size 600
 """
 from __future__ import annotations
 
@@ -34,6 +37,50 @@ if str(_BACKEND) not in sys.path:
 from meta_schemas import META_FEW_SHOT_EXAMPLES  # noqa: E402
 from orchestrator import build_meta_system_prompt  # noqa: E402
 from meta_schemas import get_meta_tool_schemas  # noqa: E402
+
+# Prompt-compression experiment: train the model to emit the same JSON tool call
+# with a short fixed instruction instead of the ~3k-token schema dump. Keep this
+# under ~100 tokens (approx chars/4) so max_seq_len can stay at 1024.
+MINIMAL_SYSTEM_PROMPT = (
+    "Convert the question into ONE JSON meta-tool call for Olist data. "
+    "Backend runs SQL — choose shape and filters only.\n"
+    "Tools: count, rank, sum, list, breakdown, compare, lookup, query.\n"
+    'Reply ONLY: {"tool":"<name>","args":{...}}\n'
+    "count.entity: products=catalog, orders=sales, reviews, payments. "
+    "Dates: today/yesterday/this|last_week|month|year. "
+    "Keep every filter (city, state, status, date_token)."
+)
+
+# ~4 chars/token is a conservative English estimate used only as a soft guard.
+_MINIMAL_PROMPT_MAX_APPROX_TOKENS = 100
+
+
+def approx_token_count(text: str) -> int:
+    """Rough token estimate (chars/4). Good enough for the <100-token gate."""
+    return max(1, (len(text) + 3) // 4)
+
+
+def resolve_system_prompt(mode: str) -> str:
+    """Return the system prompt for the requested export mode."""
+    if mode == "minimal":
+        prompt = MINIMAL_SYSTEM_PROMPT
+        tokens = approx_token_count(prompt)
+        if tokens > _MINIMAL_PROMPT_MAX_APPROX_TOKENS:
+            raise ValueError(
+                f"MINIMAL_SYSTEM_PROMPT is ~{tokens} tokens "
+                f"(limit {_MINIMAL_PROMPT_MAX_APPROX_TOKENS}); shorten it."
+            )
+        return prompt
+    if mode == "full":
+        return build_meta_system_prompt(get_meta_tool_schemas())
+    raise ValueError(f"Unknown system mode: {mode!r} (expected 'full' or 'minimal')")
+
+
+def train_val_filenames(schema: str, mode: str) -> tuple[str, str]:
+    """Return (train.jsonl, val.jsonl) names; minimal mode uses `_min` suffix."""
+    if mode == "minimal":
+        return f"{schema}_sft_train_min.jsonl", f"{schema}_sft_val_min.jsonl"
+    return f"{schema}_sft_train.jsonl", f"{schema}_sft_val.jsonl"
 
 # Match date phrases in either spaced ("this year") or tokenized ("this_year")
 # form — questions use spaces, tokens use underscores. Normalize to the token.
@@ -560,12 +607,48 @@ def write_jsonl(path: Path, records: list[dict]) -> None:
             f.write(json.dumps(to_dashscope_record(rec), ensure_ascii=False) + "\n")
 
 
+def validate_export(train: list[dict], val: list[dict], system_prompt: str, mode: str) -> None:
+    """Fail closed on format / leakage / label issues before writing JSONL."""
+    if mode == "minimal":
+        tokens = approx_token_count(system_prompt)
+        if tokens > _MINIMAL_PROMPT_MAX_APPROX_TOKENS:
+            raise ValueError(f"minimal system prompt ~{tokens} tokens exceeds limit")
+
+    train_q = {r["messages"][1]["content"] for r in train}
+    val_q = {r["messages"][1]["content"] for r in val}
+    overlap = train_q & val_q
+    if overlap:
+        sample = sorted(overlap)[:3]
+        raise ValueError(f"train/val question overlap ({len(overlap)}): {sample!r}")
+
+    for split_name, records in (("train", train), ("val", val)):
+        for i, rec in enumerate(records):
+            msgs = rec["messages"]
+            roles = [m.get("role") for m in msgs]
+            if roles != ["system", "user", "assistant"]:
+                raise ValueError(f"{split_name}[{i}]: bad roles {roles}")
+            if msgs[0]["content"] != system_prompt:
+                raise ValueError(f"{split_name}[{i}]: system prompt mismatch")
+            try:
+                assistant = json.loads(msgs[2]["content"])
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"{split_name}[{i}]: assistant JSON invalid: {exc}") from exc
+            if "mode" not in assistant or not assistant.get("steps"):
+                raise ValueError(f"{split_name}[{i}]: assistant missing mode/steps")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Export SFT JSONL for DashScope fine-tuning")
     parser.add_argument("--schema", default="olist", help="Schema name (default: olist)")
     parser.add_argument("--out-dir", default="datasets", help="Output directory (default: datasets)")
     parser.add_argument("--val-fraction", type=float, default=0.1, help="Validation holdout fraction")
     parser.add_argument("--seed", type=int, default=42, help="RNG seed for train/val split")
+    parser.add_argument(
+        "--system-mode",
+        choices=("full", "minimal"),
+        default="full",
+        help="full = schema prompt (~3k tokens); minimal = short fixed instruction (<100 tokens)",
+    )
     parser.add_argument(
         "--target-size",
         type=int,
@@ -587,7 +670,7 @@ def main() -> int:
     args = parser.parse_args()
 
     tests_dir = _BACKEND / "tests"
-    system_prompt = build_meta_system_prompt(get_meta_tool_schemas())
+    system_prompt = resolve_system_prompt(args.system_mode)
 
     records = collect_records(system_prompt, tests_dir)
     if not records:
@@ -613,13 +696,18 @@ def main() -> int:
         train = [r for r in train if r["messages"][1]["content"] not in val_questions]
         random.Random(args.seed).shuffle(train)
         random.Random(args.seed + 2).shuffle(val)
+
+    validate_export(train, val, system_prompt, args.system_mode)
+
     out_dir = _REPO / args.out_dir
-    train_path = out_dir / f"{args.schema}_sft_train.jsonl"
-    val_path = out_dir / f"{args.schema}_sft_val.jsonl"
+    train_name, val_name = train_val_filenames(args.schema, args.system_mode)
+    train_path = out_dir / train_name
+    val_path = out_dir / val_name
     write_jsonl(train_path, train)
     write_jsonl(val_path, val)
 
-    print(f"Wrote {len(train)} train + {len(val)} val records")
+    print(f"Wrote {len(train)} train + {len(val)} val records (system-mode={args.system_mode})")
+    print(f"  system prompt ~{approx_token_count(system_prompt)} tokens ({len(system_prompt)} chars)")
     print(f"  {train_path}")
     print(f"  {val_path}")
     return 0
